@@ -10,7 +10,7 @@ struct ipt_ISG_info {
 };
 
 struct ipt_ISG_mt_info {
-	u_int8_t service_name[32];
+	char service_name[32];
 };
 
 #endif
