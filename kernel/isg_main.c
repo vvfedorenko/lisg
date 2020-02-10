@@ -16,6 +16,11 @@ MODULE_DESCRIPTION("Xtables: Linux ISG Access Control");
 MODULE_ALIAS("ipt_ISG");
 MODULE_ALIAS("ipt_isg");
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,10,0)
+#define xt_in(par) ((par)->in)
+#define xt_out(par) ((par)->out)
+#endif
+
 static inline struct isg_session *isg_find_session(struct isg_net *, struct isg_in_event *);
 static int isg_start_session(struct isg_session *);
 static void isg_send_sessions_list(struct isg_net *, pid_t, struct isg_in_event *);
@@ -913,7 +918,7 @@ isg_mt(const struct sk_buff *skb,
 		return 0;
 	}
 
-	isg_net = isg_pernet(dev_net((par->in != NULL) ? par->in : par->out));
+	isg_net = isg_pernet(dev_net((xt_in(par) != NULL) ? xt_in(par) : xt_out(par)));
 
 	is = isg_lookup_session(isg_net, iph->saddr);
 
@@ -981,7 +986,7 @@ isg_tg(struct sk_buff *skb,
 
 	pkt_len_bits = pkt_len << 3;
 
-	isg_net = isg_pernet(dev_net((par->in != NULL) ? par->in : par->out));
+	isg_net = isg_pernet(dev_net((xt_in(par) != NULL) ? xt_in(par) : xt_out(par)));
 
 	spin_lock_bh(&isg_lock);
 
