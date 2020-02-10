@@ -9,10 +9,7 @@
 #include <xtables.h>
 
 #include <linux/netfilter_ipv4/ip_tables.h>
-
-struct ipt_ISG_info {
-	u_int8_t flags;
-};
+#include "isg.h"
 
 static const struct option opts[] = {
 	{ "session-init", 0, NULL, '1' },
@@ -29,10 +26,6 @@ static void help(void) {
 "				  dst - use dst IP-address as username\n"
 "				If --init-mode is not specified, `src' is assumed\n");
 }
-
-#define INIT_SESSION 0x01
-#define INIT_BY_SRC  0x02
-#define INIT_BY_DST  0x04
 
 static int parse(int c, char **argv, int invert, unsigned int *flags,
                  const void *entry,

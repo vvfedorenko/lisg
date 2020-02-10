@@ -12,16 +12,13 @@
 #include <net/net_namespace.h>
 #include <net/netns/generic.h>
 
+#include "isg.h"
 #include "kcompat.h"
 
 #define ISG_NETLINK_MAIN     MAX_LINKS - 1
 #define PORT_BITMAP_SIZE     65536
 #define INITIAL_MAX_DURATION 60
 #define MAX_SD_CLASSES       16
-
-#define INIT_SESSION  0x01
-#define INIT_BY_SRC   0x02
-#define INIT_BY_DST   0x04
 
 #define ISG_DIR_IN    0x01
 #define ISG_DIR_OUT   0x02
@@ -72,14 +69,6 @@
 
 #define IS_SESSION_APPROVED(is)			\
 			(is->info.flags & ISG_IS_APPROVED)
-
-struct ipt_ISG_info {
-	u_int8_t flags;
-};
-
-struct ipt_ISG_mt_info {
-	u_int8_t service_name[32];
-};
 
 struct isg_session_info {
 	u_int64_t id;
