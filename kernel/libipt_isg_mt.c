@@ -38,11 +38,11 @@ static int parse(int c, char **argv, int invert, unsigned int *flags,
 			if (invert) {
 				xtables_error(PARAMETER_PROBLEM, "Can't invert --service-name value\n");
 			}
-			if (!strnlen(optarg, 32)) {
+			if (!strnlen(optarg, MAX_SERVICE_NAME)) {
 				xtables_error(PARAMETER_PROBLEM, "Service name must be specified with --service-name\n");
 			}
 			*flags |= INIT_SESSION;
-			strncpy(isg->service_name, optarg, strnlen(optarg, 32));
+			strncpy(isg->service_name, optarg, strnlen(optarg, MAX_SERVICE_NAME));
 			break;
 
 		default:
@@ -74,9 +74,9 @@ static void check(unsigned int flags) {
 }
 
 static struct xtables_match isg_mt_info = { 
-	.name          = "ISG",
+	.name          = "isg",
 	.version       = XTABLES_VERSION,
-	.family        = PF_INET,
+	.family        = NFPROTO_IPV4,
 	.size          = XT_ALIGN(sizeof(struct ipt_ISG_mt_info)),
 	.userspacesize = XT_ALIGN(sizeof(struct ipt_ISG_mt_info)),
 	.help          = help,
