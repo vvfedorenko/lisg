@@ -18,7 +18,7 @@ int nehash_init(struct isg_net *isg_net) {
 
 	INIT_HLIST_HEAD(&isg_net->nehash_queue);
 	INIT_HLIST_HEAD(&isg_net->traffic_class);
-
+	rwlock_init(&isg_net->nehash_rw_lock);
 	printk(KERN_INFO "ipt_ISG: Network hash table (%ld Kbytes of %u buckets, using /%d prefixes)\n", (long) hsize / 1024, nr_buckets, nehash_key_len);
 
 	return 0;
@@ -148,7 +148,7 @@ struct traffic_class *nehash_find_class(struct isg_net *isg_net, u_int8_t *class
 int nehash_commit_queue(struct isg_net *isg_net) {
 	struct nehash_entry *ne;
 
-	spin_lock_bh(&isg_lock);
+	write_lock_bh(&isg_net->nehash_rw_lock);
 
 	nehash_sweep_entries(isg_net);
 
@@ -156,7 +156,7 @@ int nehash_commit_queue(struct isg_net *isg_net) {
 		nehash_insert(isg_net, ne->pfx, ne->mask, ne->tc);
 	}
 
-	spin_unlock_bh(&isg_lock);
+	write_unlock_bh(&isg_net->nehash_rw_lock);
 
 	nehash_sweep_queue(isg_net);
 

@@ -191,7 +191,6 @@ struct isg_net {
 	struct sock *sknl;
 	struct sk_buff *sskb;
 	pid_t listener_pid;
-	spinlock_t sknl_lock;
 
 	unsigned long *port_bitmap;
 
