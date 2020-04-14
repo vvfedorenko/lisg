@@ -11,6 +11,7 @@
 #include <linux/vmalloc.h>
 #include <net/net_namespace.h>
 #include <net/netns/generic.h>
+#include <linux/list_bl.h>
 
 #include "isg.h"
 #include "kcompat.h"
@@ -180,7 +181,7 @@ struct isg_service_desc {
 };
 
 struct isg_net {
-	struct hlist_head *hash;
+	struct hlist_bl_head *hash;
 
 	struct hlist_head *nehash;
 	struct hlist_head nehash_queue;
@@ -190,6 +191,7 @@ struct isg_net {
 	struct sock *sknl;
 	struct sk_buff *sskb;
 	pid_t listener_pid;
+	spinlock_t sknl_lock;
 
 	unsigned long *port_bitmap;
 
@@ -199,6 +201,7 @@ struct isg_net {
 	unsigned int tg_permit_action;
 	unsigned int tg_deny_action;
 	unsigned int pass_outgoing;
+	rwlock_t nehash_rw_lock;
 };
 
 extern unsigned int nehash_key_len;
