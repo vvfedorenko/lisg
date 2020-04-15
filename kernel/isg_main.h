@@ -103,6 +103,8 @@ struct isg_session_stat {
 };
 
 struct isg_session {
+	atomic_t use;
+	spinlock_t lock;
 	struct isg_session_info info;
 	struct isg_session_stat stat;
 
@@ -117,7 +119,8 @@ struct isg_session {
 
 	struct timer_list timer;
 
-	struct hlist_node list;			/* Main list of sessions (isg_hash) */
+	unsigned int hash_key;
+	struct hlist_bl_node list;			/* Main list of sessions (isg_hash) */
 	struct isg_service_desc *sdesc;	/* Service description for this sub-session */
 	struct isg_session *parent_is;	/* Parent session (only for sub-sessions/services) */
 
@@ -126,6 +129,19 @@ struct isg_session {
 
 	struct isg_net *isg_net;
 };
+
+void isg_session_destroy(struct isg_session *isg);
+static inline void isg_session_put(struct isg_session *isg)
+{
+	if (isg && atomic_dec_and_test(&isg->use))
+		isg_session_destroy(isg);
+}
+static inline void isg_session_get(struct isg_session *isg)
+{
+	if (isg)
+		atomic_inc(&isg->use);
+}
+
 
 struct isg_in_event {
 	u_int32_t type;
@@ -201,6 +217,7 @@ struct isg_net {
 	unsigned int tg_deny_action;
 	unsigned int pass_outgoing;
 	rwlock_t nehash_rw_lock;
+	rwlock_t services_rw_lock;
 };
 
 extern unsigned int nehash_key_len;
