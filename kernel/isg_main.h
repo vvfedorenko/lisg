@@ -103,7 +103,6 @@ struct isg_session_stat {
 };
 
 struct isg_session {
-	atomic_t use;
 	spinlock_t lock;
 	struct isg_session_info info;
 	struct isg_session_stat stat;
@@ -129,19 +128,6 @@ struct isg_session {
 
 	struct isg_net *isg_net;
 };
-
-void isg_session_destroy(struct isg_session *isg);
-static inline void isg_session_put(struct isg_session *isg)
-{
-	if (isg && atomic_dec_and_test(&isg->use))
-		isg_session_destroy(isg);
-}
-static inline void isg_session_get(struct isg_session *isg)
-{
-	if (isg)
-		atomic_inc(&isg->use);
-}
-
 
 struct isg_in_event {
 	u_int32_t type;
