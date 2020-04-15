@@ -111,27 +111,33 @@ static int nehash_insert(struct isg_net *isg_net, u_int32_t pfx, u_int32_t mask,
 }
 
 inline struct nehash_entry *nehash_lookup(struct isg_net *isg_net, u_int32_t ipaddr) {
-	struct nehash_entry *ne;
+	struct nehash_entry *ne, *rne = NULL;
 
 	u_int32_t key, idx;
 
 	key = ntohl(ipaddr);
 	idx = key >> (32 - nehash_key_len);
 
+	read_lock_bh(&isg_net->nehash_rw_lock);
+
 	hlist_for_each_entry(ne, &isg_net->nehash[idx], list) {
 		if ((key & ne->mask) == ne->pfx) {
-			return ne;
+			rne = ne;
+			break;
 		}
 	}
 
 	/* Trying to use "default" */
-	hlist_for_each_entry(ne, &isg_net->nehash[0], list) {
-		if (ne->pfx == 0 && ne->mask == 0) {
-			return ne;
+	if (!rne) {
+		hlist_for_each_entry(ne, &isg_net->nehash[0], list) {
+			if (ne->pfx == 0 && ne->mask == 0) {
+				rne = ne;
+				break;
+			}
 		}
 	}
-
-	return NULL;
+	read_unlock_bh(&isg_net->nehash_rw_lock);
+	return rne;
 }
 
 struct traffic_class *nehash_find_class(struct isg_net *isg_net, u_int8_t *class_name) {
