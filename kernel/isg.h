@@ -1,7 +1,8 @@
 #ifndef _ISG_H
 #define _ISG_H
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,38)
+#include <linux/version.h>
+#if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 38)
 #error Minimum Kernel version is 2.6.38
 #endif
 
