@@ -71,6 +71,9 @@
 #define IS_SESSION_APPROVED(is)			\
 			(is->info.flags & ISG_IS_APPROVED)
 
+#define IS_SESSION_DYING(is) \
+			(is->info.flags & ISG_IS_DYING)
+
 struct isg_session_info {
 	u_int64_t id;
 	u_int8_t cookie[32];

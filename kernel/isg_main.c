@@ -546,6 +546,9 @@ static struct isg_session *__isg_create_session(struct isg_net *isg_net, u_int32
 
 static int __isg_start_session(struct isg_session *is) {
 	struct timespec ts_now;
+
+	if (IS_SESSION_DYING(is))
+		return 0;
 	ktime_get_ts(&ts_now);
 
 	isg_log("ipt_ISG: start session Virtual%d", is->info.port_number);
@@ -566,7 +569,7 @@ static int __isg_start_session(struct isg_session *is) {
 
 	mod_timer(&is->timer, jiffies + session_check_interval * HZ);
 
-	return 0;
+	return 1;
 }
 
 static inline int isg_start_session(struct isg_session *is) {
@@ -576,7 +579,8 @@ static inline int isg_start_session(struct isg_session *is) {
 	ret = __isg_start_session(is);
 	spin_unlock_bh(&is->lock);
 
-	isg_send_event(is->isg_net, EVENT_SESS_START, is, 0, NLMSG_DONE, 0);
+	if (ret)
+		isg_send_event(is->isg_net, EVENT_SESS_START, is, 0, NLMSG_DONE, 0);
 
 	return ret;
 }
@@ -591,12 +595,18 @@ static int isg_update_session(struct isg_net *isg_net, struct isg_in_event *ev) 
 		return 1;
 	}
 
+	if (IS_SESSION_DYING(is)) {
+		isg_log("ipt_ISG: update on dying session Virtual%d", is->info.port_number);
+		return 1;
+	}
+
+	isg_log("ipt_ISG: update session Virtual%d", is->info.port_number);
+
 	spin_lock_bh(&is->lock);
 	if (!is->info.flags) {
 		is->info.max_duration = 0;
 	}
 
-	isg_log("ipt_ISG: update session Virtual%d", is->info.port_number);
 
 	is->info.in_rate = ev->si.sinfo.in_rate;
 	is->info.in_burst = ev->si.sinfo.in_burst;
@@ -671,10 +681,12 @@ static int isg_free_session(struct isg_session *is) {
 		hlist_bl_del_init(&is->list);
 		hlist_bl_unlock(h);
 		local_bh_enable();
+		spin_lock_bh(&is->lock);
 		is->info.flags |= ISG_IS_DYING;
 		if (is->info.port_number) {
 			clear_bit(is->info.port_number, is->isg_net->port_bitmap);
 		}
+		spin_unlock_bh(&is->lock);
 	}
 
 	if (!hlist_empty(&is->srv_head)) { /* Freeing sub-sessions also */
@@ -885,7 +897,7 @@ static void isg_session_timeout(struct timer_list *arg) {
 		return;
 	}
 
-	if (is->info.flags & ISG_IS_DYING) {
+	if (IS_SESSION_DYING(is)) {
 		isg_log("ipt_ISG: Virtual%d ISG_IS_DYING, freeing", is->info.port_number);
 		if (!hlist_empty(&is->srv_head)) {
 			hlist_for_each_entry_safe(isrv, l, &is->srv_head, srv_node) {
