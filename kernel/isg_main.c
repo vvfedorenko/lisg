@@ -1144,12 +1144,12 @@ isg_tg(struct sk_buff *skb,
 			is->stat.in_packets++;
 			spin_unlock_bh(&is->lock);
 
-			spin_lock_bh(&classic_is->lock);
 			if (classic_is) {
+				spin_lock_bh(&classic_is->lock);
 				classic_is->stat.in_bytes += pkt_len;
 				classic_is->stat.in_packets++;
+				spin_unlock_bh(&classic_is->lock);
 			}
-			spin_unlock_bh(&classic_is->lock);
 
 			goto ACCEPT;
 		} else {
@@ -1167,12 +1167,12 @@ isg_tg(struct sk_buff *skb,
 			is->stat.out_packets++;
 			spin_unlock_bh(&is->lock);
 
-			spin_lock_bh(&classic_is->lock);
 			if (classic_is) {
+				spin_lock_bh(&classic_is->lock);
 				classic_is->stat.out_bytes += pkt_len;
 				classic_is->stat.out_packets++;
+				spin_unlock_bh(&classic_is->lock);
 			}
-			spin_unlock_bh(&classic_is->lock);
 
 			goto ACCEPT;
 		} else {
