@@ -877,7 +877,8 @@ static void isg_session_timeout(struct timer_list *arg) {
 	struct timespec ts_ls;
 	struct isg_session *isrv;
 	struct hlist_node *l;
-	
+	u_int32_t stat_duration;
+
 	ktime_get_ts(&ts_now);
 
 	if (module_exiting) {
@@ -920,7 +921,7 @@ static void isg_session_timeout(struct timer_list *arg) {
 		} else if (IS_SESSION_APPROVED(is)) {
 
 			spin_lock_bh(&is->lock);
-			is->stat.duration = ts_now.tv_sec - is->start_ktime;
+			is->stat.duration = stat_duration = ts_now.tv_sec - is->start_ktime;
 
 			if (!hlist_empty(&is->srv_head)) {
 				hlist_for_each_entry_safe(isrv, l, &is->srv_head, srv_node) {
@@ -930,17 +931,16 @@ static void isg_session_timeout(struct timer_list *arg) {
 			}
 
 			ts_ls = ns_to_timespec(is->in_last_seen);
+			spin_unlock_bh(&is->lock);
 
 			/* Check maximum session duration and idle timeout */
-			if ((is->info.max_duration && is->stat.duration >= is->info.max_duration) ||
+			if ((is->info.max_duration && stat_duration >= is->info.max_duration) ||
 				(is->info.idle_timeout && ts_now.tv_sec - ts_ls.tv_sec >= is->info.idle_timeout)) {
-				spin_unlock_bh(&is->lock);
 				isg_free_session(is);
 				goto out;
 			/* Check last export time */
 			} else if (is->info.export_interval && ts_now.tv_sec - is->last_export >= is->info.export_interval) {
 				is->last_export = ts_now.tv_sec;
-				spin_unlock_bh(&is->lock);
 				isg_send_event(is->isg_net, EVENT_SESS_UPDATE, is, 0, NLMSG_DONE, 0);
 			}
 		}	
