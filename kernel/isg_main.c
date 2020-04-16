@@ -912,19 +912,22 @@ static void isg_session_timeout(struct timer_list *arg) {
 	}
 
 	if (IS_SERVICE_ONLINE(is)) {
-		spin_lock_bh(&is->lock);
 		is->stat.duration = ts_now.tv_sec - is->start_ktime;
 		ts_ls = ns_to_timespec(is->in_last_seen);
 
 		/* Check maximum session duration and idle timeout */
 		if ((is->info.max_duration && is->stat.duration >= is->info.max_duration) ||
 		    (is->info.idle_timeout && ts_now.tv_sec - ts_ls.tv_sec >= is->info.idle_timeout)) {
+			spin_lock_bh(&is->lock);
 			is->info.flags &= ~ISG_SERVICE_ONLINE;
 			get_random_bytes(&(is->info.id), sizeof(is->info.id));
 			is->start_ktime = 0;
 			memset(&is->stat, 0, sizeof(is->stat));				
+			spin_unlock_bh(&is->lock);
+		} else {
+			/* session service is active */
+			mod_timer(&is->timer, jiffies + session_check_interval * HZ);
 		}
-		spin_unlock_bh(&is->lock);
 	} else if (!IS_SERVICE(is)) { /* Unapproved session */
 
 		//call something like isg_free_session
@@ -957,9 +960,9 @@ static void isg_session_timeout(struct timer_list *arg) {
 				isg_send_event(is->isg_net, EVENT_SESS_UPDATE, is, 0, NLMSG_DONE, 0);
 			}
 		}	
-	}
+		mod_timer(&is->timer, jiffies + session_check_interval * HZ);
 
-	mod_timer(&is->timer, jiffies + session_check_interval * HZ);
+	}
 
 out:
 	return;
