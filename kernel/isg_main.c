@@ -749,9 +749,10 @@ static inline int isg_equal(struct isg_in_event *ev, struct isg_session *is) {
 static struct isg_session *isg_find_session(struct isg_net *isg_net, struct isg_in_event *ev) {
 	unsigned int i;
 	struct isg_session *is;
+	struct hlist_bl_node *l, *c;
 
 	for (i = 0; i < nr_buckets; i++) {
-		hlist_for_each_entry(is, &isg_net->hash[i], list) {
+		hlist_bl_for_each_entry_safe(is, l, c, &isg_net->hash[i], list) {
 			if (ev->si.sinfo.flags & ISG_IS_SERVICE) {
 				/* Searching for sub-session (service) */
 				if (!hlist_empty(&is->srv_head)) {
