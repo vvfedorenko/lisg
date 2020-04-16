@@ -123,6 +123,12 @@ static struct ctl_table isg_net_table[] = {
 	{ },
 };
 
+#ifdef DEBUG
+#define isg_log(fmt,...) printk(KERN_DEBUG pr_fmt(fmt), ##__VA_ARGS__)
+#else
+#define isg_log(fmt,...) no_printk(KERN_DEBUG pr_fmt(fmt), ##__VA_ARGS__)
+#endif
+
 static void isg_nl_receive_skb(struct sk_buff *skb) {
 	struct nlmsghdr *nlh = (struct nlmsghdr *) skb->data;
 	struct isg_in_event *ev = (struct isg_in_event *) NLMSG_DATA(nlh);
@@ -361,8 +367,9 @@ static inline unsigned int get_isg_hash(u_int32_t val) {
 /* MUST be called under read_lock of services_rw_lock */
 static struct isg_service_desc *find_service_desc(struct isg_net *isg_net, u_int8_t *service_name) {
 	struct isg_service_desc *sdesc;
+	struct hlist_node *n;
 
-	hlist_for_each_entry(sdesc, &isg_net->services, list) {
+	hlist_for_each_entry_safe(sdesc, n, &isg_net->services, list) {
 		if (!strcmp(sdesc->name, service_name)) {
 			return sdesc;
 		}
@@ -389,6 +396,7 @@ static int isg_add_service_desc(struct isg_net *isg_net, u_int8_t *service_name,
 	struct isg_service_desc *sdesc;
 	int i;
 
+	isg_log("ipt_ISG: add service decription %s: tc %s", (char *)service_name, (char *) tc_name);
 	read_lock_bh(&isg_net->nehash_rw_lock);
 	tc = nehash_find_class(isg_net, tc_name);
 	if (!tc) {
@@ -396,7 +404,6 @@ static int isg_add_service_desc(struct isg_net *isg_net, u_int8_t *service_name,
 		goto err;
 	}
 
-	write_lock_bh(&isg_net->services_rw_lock);
 	sdesc = find_service_desc(isg_net, service_name);
 	if (!sdesc) {
 		sdesc = kzalloc(sizeof(struct isg_service_desc), GFP_ATOMIC);
@@ -406,9 +413,10 @@ static int isg_add_service_desc(struct isg_net *isg_net, u_int8_t *service_name,
 		}
 
 		memcpy(sdesc->name, service_name, sizeof(sdesc->name));
+		write_lock_bh(&isg_net->services_rw_lock);
 		hlist_add_head(&sdesc->list, &isg_net->services);
+		write_unlock_bh(&isg_net->services_rw_lock);
 	}
-	write_unlock_bh(&isg_net->services_rw_lock);
 
 	tc_list = sdesc->tcs;
 
@@ -449,6 +457,8 @@ static int isg_apply_service(struct isg_net *isg_net, struct isg_in_event *ev) {
 		printk(KERN_ERR "ipt_ISG: Unable to find parent session\n");
 		return 1;
 	}
+
+	isg_log("ipt_ISG: apply service %s to session Virtual%d", ev->si.service_name, is->info.port_number);
 
 	nis = kzalloc(sizeof(struct isg_session), GFP_ATOMIC);
 	if (!nis) {
@@ -518,6 +528,8 @@ static struct isg_session *__isg_create_session(struct isg_net *isg_net, u_int32
 
 	get_random_bytes(&(is->info.id), sizeof(is->info.id));
 
+	isg_log("ipt_ISG: create session Virtual%d", is->info.port_number);
+
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4,14,0)
 	setup_timer(&is->timer, isg_session_timeout, (unsigned long)is);
 #else
@@ -535,6 +547,8 @@ static struct isg_session *__isg_create_session(struct isg_net *isg_net, u_int32
 static int __isg_start_session(struct isg_session *is) {
 	struct timespec ts_now;
 	ktime_get_ts(&ts_now);
+
+	isg_log("ipt_ISG: start session Virtual%d", is->info.port_number);
 
 	is->start_ktime = is->last_export = ts_now.tv_sec;
 
@@ -581,6 +595,8 @@ static int isg_update_session(struct isg_net *isg_net, struct isg_in_event *ev) 
 	if (!is->info.flags) {
 		is->info.max_duration = 0;
 	}
+
+	isg_log("ipt_ISG: update session Virtual%d", is->info.port_number);
 
 	is->info.in_rate = ev->si.sinfo.in_rate;
 	is->info.in_burst = ev->si.sinfo.in_burst;
@@ -648,6 +664,7 @@ static int isg_free_session(struct isg_session *is) {
 	struct hlist_node *n;
 
 	if (!IS_SERVICE(is)) {
+		isg_log("ipt_ISG: free session %d", is->info.port_number);
 		h = &is->isg_net->hash[is->hash_key];
 		local_bh_disable();
 		hlist_bl_lock(h);
@@ -683,6 +700,7 @@ static int isg_clear_session(struct isg_net *isg_net, struct isg_in_event *ev) {
 
 	is = isg_find_session(isg_net, ev);
 	if (is) {
+		isg_log("ipt_ISG: clear session %d", is->info.port_number);
 		isg_free_session(is);
 		return 0;
 	}
@@ -693,8 +711,8 @@ static int isg_clear_session(struct isg_net *isg_net, struct isg_in_event *ev) {
 static inline struct isg_session *isg_lookup_session_hash(struct isg_net *isg_net,
                 u_int32_t ipaddr, unsigned int h) {
 	struct isg_session *is;
-	struct hlist_bl_node *l;
-	hlist_bl_for_each_entry(is, l, &isg_net->hash[h], list) {
+	struct hlist_bl_node *l, *c;
+	hlist_bl_for_each_entry_safe(is, l, c, &isg_net->hash[h], list) {
 		if (is->info.ipaddr == ipaddr) {
 			return is;
 		}
@@ -705,11 +723,11 @@ static inline struct isg_session *isg_lookup_session_hash(struct isg_net *isg_ne
 
 static inline struct isg_session *isg_lookup_session(struct isg_net *isg_net, u_int32_t ipaddr) {
 	struct isg_session *is;
-	struct hlist_bl_node *l;
+	struct hlist_bl_node *l, *c;
 
 	unsigned int h = get_isg_hash(ipaddr);
 
-	hlist_bl_for_each_entry(is, l, &isg_net->hash[h], list) {
+	hlist_bl_for_each_entry_safe(is, l, c, &isg_net->hash[h], list) {
 		if (is->info.ipaddr == ipaddr) {
 			return is;
 		}
@@ -866,7 +884,7 @@ static void isg_session_timeout(struct timer_list *arg) {
 	}
 
 	if (is->info.flags & ISG_IS_DYING) {
-		printk(KERN_DEBUG "ipt_ISG: ISG_IS_DYING is set, freeing (ignore this)\n");
+		isg_log("ipt_ISG: Virtual%d ISG_IS_DYING, freeing", is->info.port_number);
 		if (!hlist_empty(&is->srv_head)) {
 			hlist_for_each_entry_safe(isrv, l, &is->srv_head, srv_node) {
 				hlist_del(&isrv->srv_node);
