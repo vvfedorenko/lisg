@@ -351,6 +351,7 @@ alloc_fail:
 
 	if (isg_net->sskb) {
 		kfree_skb(isg_net->sskb);
+		isg_net->sskb = NULL;
 	}
 
 	kfree(ev);
