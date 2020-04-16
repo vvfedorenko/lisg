@@ -380,7 +380,7 @@ static void isg_sweep_service_desc_tc(struct isg_net *isg_net) {
 			memset(sdesc->tcs, 0, sizeof(sdesc->tcs));
 		}
 	}
-	read_lock_bh(&isg_net->services_rw_lock);
+	read_unlock_bh(&isg_net->services_rw_lock);
 }
 
 static int isg_add_service_desc(struct isg_net *isg_net, u_int8_t *service_name, u_int8_t *tc_name) {
@@ -426,11 +426,11 @@ static int isg_add_service_desc(struct isg_net *isg_net, u_int8_t *service_name,
 	*tc_list = tc;
 
 out:
-	read_lock_bh(&isg_net->nehash_rw_lock);
+	read_unlock_bh(&isg_net->nehash_rw_lock);
 	return 0;
 
 err:
-	read_lock_bh(&isg_net->nehash_rw_lock);
+	read_unlock_bh(&isg_net->nehash_rw_lock);
 	return 1;
 }
 
