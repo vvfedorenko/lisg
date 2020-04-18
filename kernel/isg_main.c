@@ -253,6 +253,16 @@ static struct sk_buff *isg_alloc_skb(struct isg_net *isg_net, unsigned int size)
 	return skb;
 }
 
+static inline struct isg_ev_session_stat isg_init_ev_stat(struct isg_session *is)
+{
+	struct isg_ev_session_stat res = { 0 };
+	res.in_bytes    = is->stat[ISG_DIR_IN].bytes;
+	res.in_packets  = is->stat[ISG_DIR_IN].packets;
+	res.out_bytes   = is->stat[ISG_DIR_OUT].bytes;
+	res.out_packets = is->stat[ISG_DIR_OUT].bytes;
+	return res;
+}
+
 static void isg_send_event(struct isg_net *isg_net, u_int16_t type, struct isg_session *is, pid_t pid, int nl_type, int nl_flags) {
 	struct isg_out_event *ev;
 	struct sk_buff *skb;
@@ -283,7 +293,7 @@ static void isg_send_event(struct isg_net *isg_net, u_int16_t type, struct isg_s
 
 	if (is) {
 		ev->sinfo = is->info;
-		ev->sstat = is->stat;
+		ev->sstat = isg_init_ev_stat(is);
 
 		if (is->start_ktime) {
 			ev->sstat.duration = ts_now.tv_sec - is->start_ktime;
@@ -556,13 +566,8 @@ static int __isg_start_session(struct isg_session *is) {
 
 	is->start_ktime = is->last_export = ts_now.tv_sec;
 
-	is->stat.in_packets  = 0;
-	is->stat.out_packets = 0;
-	is->stat.in_bytes    = 0;
-	is->stat.out_bytes   = 0;
-	is->stat.duration    = 0;
-
-	is->in_last_seen = timespec_to_ns(&ts_now);
+	memset(is->stat, 0, 2*sizeof(struct isg_session_stat));
+	is->stat[ISG_DIR_IN].last_seen = timespec_to_ns(&ts_now);
 
 	if (is->info.flags & ISG_IS_SERVICE) {
 		is->info.flags |= ISG_SERVICE_ONLINE;
@@ -609,12 +614,8 @@ static int isg_update_session(struct isg_net *isg_net, struct isg_in_event *ev) 
 	}
 
 
-	is->info.in_rate = ev->si.sinfo.in_rate;
-	is->info.in_burst = ev->si.sinfo.in_burst;
-
-	is->info.out_rate = ev->si.sinfo.out_rate;
-	is->info.out_burst = ev->si.sinfo.out_burst;
-
+	is->info.rate[ISG_DIR_IN] = ev->si.sinfo.rate[ISG_DIR_IN];
+	is->info.rate[ISG_DIR_OUT] = ev->si.sinfo.rate[ISG_DIR_OUT];
 	if (ev->si.sinfo.nat_ipaddr) {
 		is->info.nat_ipaddr = ev->si.sinfo.nat_ipaddr;
 	}
@@ -853,30 +854,20 @@ static void isg_send_services_list(struct isg_net *isg_net, pid_t pid, struct is
 }
 
 /* MUST be called under session spinlock locked */
-static void __isg_update_tokens(struct isg_session *is, u_int64_t now, u_int8_t dir) {
+static inline void __isg_update_tokens(struct isg_session_stat *iss, u_int64_t now,
+			u_int32_t rate, u_int32_t burst)
+{
 	u_int64_t tokens;
 
-	if (dir == ISG_DIR_IN) {
-		tokens = div_s64(is->info.in_rate * (now - is->in_last_seen), NSEC_PER_SEC);
+	tokens = div_s64(rate * (now - iss->last_seen), NSEC_PER_SEC);
 
-		if ((is->in_tokens + tokens) > is->info.in_burst) {
-			is->in_tokens = is->info.in_burst;
-		} else {
-			is->in_tokens += tokens;
-		}
-
-		is->in_last_seen = now;
+	if ((iss->tokens + tokens) > burst) {
+		iss->tokens = burst;
 	} else {
-		tokens = div_s64(is->info.out_rate * (now - is->out_last_seen), NSEC_PER_SEC);
-
-		if ((is->out_tokens + tokens) > is->info.out_burst) {
-			is->out_tokens = is->info.out_burst;
-		} else {
-			is->out_tokens += tokens;
-		}
-
-		is->out_last_seen = now;
+		iss->tokens += tokens;
 	}
+
+	iss->last_seen = now;
 }
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4,14,0)
@@ -911,18 +902,19 @@ static void isg_session_timeout(struct timer_list *arg) {
 		return;
 	}
 
+	stat_duration = ts_now.tv_sec - is->start_ktime;
+
 	if (IS_SERVICE_ONLINE(is)) {
-		is->stat.duration = ts_now.tv_sec - is->start_ktime;
-		ts_ls = ns_to_timespec(is->in_last_seen);
+		ts_ls = ns_to_timespec(is->stat[ISG_DIR_IN].last_seen);
 
 		/* Check maximum session duration and idle timeout */
-		if ((is->info.max_duration && is->stat.duration >= is->info.max_duration) ||
+		if ((is->info.max_duration && stat_duration >= is->info.max_duration) ||
 		    (is->info.idle_timeout && ts_now.tv_sec - ts_ls.tv_sec >= is->info.idle_timeout)) {
 			spin_lock_bh(&is->lock);
 			is->info.flags &= ~ISG_SERVICE_ONLINE;
 			get_random_bytes(&(is->info.id), sizeof(is->info.id));
 			is->start_ktime = 0;
-			memset(&is->stat, 0, sizeof(is->stat));				
+			memset(is->stat, 0, 2*sizeof(struct isg_session_stat));
 			spin_unlock_bh(&is->lock);
 		} else {
 			/* session service is active */
@@ -931,22 +923,23 @@ static void isg_session_timeout(struct timer_list *arg) {
 	} else if (!IS_SERVICE(is)) { /* Unapproved session */
 
 		//call something like isg_free_session
-		if (!is->info.flags && ts_now.tv_sec - is->start_ktime >= is->info.max_duration) {
+		if (!is->info.flags && stat_duration >= is->info.max_duration) {
 			isg_free_session(is);
 			goto out;
 		} else if (IS_SESSION_APPROVED(is)) {
 
 			spin_lock_bh(&is->lock);
-			is->stat.duration = stat_duration = ts_now.tv_sec - is->start_ktime;
 
 			if (!hlist_empty(&is->srv_head)) {
 				hlist_for_each_entry_safe(isrv, l, &is->srv_head, srv_node) {
-					is->in_last_seen = max(is->in_last_seen, isrv->in_last_seen);
-					is->out_last_seen = max(is->out_last_seen, isrv->out_last_seen);
+					is->stat[ISG_DIR_IN].last_seen = max(is->stat[ISG_DIR_IN].last_seen,
+									isrv->stat[ISG_DIR_IN].last_seen);
+					is->stat[ISG_DIR_OUT].last_seen = max(is->stat[ISG_DIR_OUT].last_seen,
+									isrv->stat[ISG_DIR_OUT].last_seen);
 				}
 			}
 
-			ts_ls = ns_to_timespec(is->in_last_seen);
+			ts_ls = ns_to_timespec(is->stat[ISG_DIR_IN].last_seen);
 			spin_unlock_bh(&is->lock);
 
 			/* Check maximum session duration and idle timeout */
@@ -1043,6 +1036,7 @@ isg_tg(struct sk_buff *skb,
 #endif
 {
 	const struct ipt_ISG_info *iinfo = par->targinfo;
+	struct isg_session_stat *stat, *parent_stat;
 
 	struct iphdr _iph, *iph;
 	struct isg_session *is, *isrv, *classic_is = NULL;
@@ -1051,9 +1045,10 @@ isg_tg(struct sk_buff *skb,
 	__be32 laddr, raddr;
 	struct isg_net *isg_net, *iisg_net;
 	unsigned int shash;
+	int dir;
 
 
-	u_int32_t pkt_len, pkt_len_bits;
+	u_int32_t pkt_len, pkt_len_bits, rate, burst;
 	struct timespec ts_now;
 	u_int64_t now;
 
@@ -1074,9 +1069,11 @@ isg_tg(struct sk_buff *skb,
 	if (iinfo->flags & INIT_BY_SRC) { /* Init direction */
 		laddr = iph->saddr;
 		raddr = iph->daddr;
+		dir = ISG_DIR_IN;
 	} else {
 		laddr = iph->daddr;
 		raddr = iph->saddr;
+		dir = ISG_DIR_OUT;
 	}
 
 	shash = get_isg_hash(laddr);
@@ -1106,6 +1103,7 @@ isg_tg(struct sk_buff *skb,
 		goto DROP;
 	}
 
+	prefetchw(is->stat);
 	if (!hlist_empty(&is->srv_head)) {
 		/* This session is having sub-sessions, try to classify */
 		iisg_net = is->isg_net;
@@ -1144,58 +1142,38 @@ isg_tg(struct sk_buff *skb,
 			/* This packet not belongs to session's services (or appropriate service's status is not on) */
 			goto DROP;
 		}
-
+		prefetchw(is->stat);
 		if (!(is->info.flags & ISG_SERVICE_ONLINE)) {
 			isg_start_session(is);
 		}
 	}
 
-	if (iinfo->flags & INIT_BY_SRC) {
-		spin_lock_bh(&is->lock);
-		__isg_update_tokens(is, now, ISG_DIR_IN);
+	stat = &is->stat[dir];
+	parent_stat = classic_is ? &classic_is->stat[dir] : NULL ;
+	rate = is->info.rate[dir].rate;
+	burst = is->info.rate[dir].burst;
 
-		if (pkt_len_bits <= is->in_tokens || !is->info.in_rate) {
-			is->in_tokens -= pkt_len_bits;
+	spin_lock_bh(&is->lock);
+	__isg_update_tokens(stat, now, rate, burst);
 
-			is->stat.in_bytes += pkt_len;
-			is->stat.in_packets++;
-			spin_unlock_bh(&is->lock);
+	if (pkt_len_bits <= stat->tokens || !rate) {
+		stat->tokens -= pkt_len_bits;
 
-			if (classic_is) {
-				spin_lock_bh(&classic_is->lock);
-				classic_is->stat.in_bytes += pkt_len;
-				classic_is->stat.in_packets++;
-				spin_unlock_bh(&classic_is->lock);
-			}
+		stat->bytes += pkt_len;
+		stat->packets++;
+		spin_unlock_bh(&is->lock);
 
-			goto ACCEPT;
-		} else {
-			spin_unlock_bh(&is->lock);
-			goto DROP;
+		if (classic_is) {
+			spin_lock_bh(&classic_is->lock);
+			parent_stat->bytes += pkt_len;
+			parent_stat->packets++;
+			spin_unlock_bh(&classic_is->lock);
 		}
+
+		goto ACCEPT;
 	} else {
-		spin_lock_bh(&is->lock);
-		__isg_update_tokens(is, now, ISG_DIR_OUT);
-
-		if (pkt_len_bits <= is->out_tokens || !is->info.out_rate) {
-			is->out_tokens -= pkt_len_bits;
-
-			is->stat.out_bytes += pkt_len;
-			is->stat.out_packets++;
-			spin_unlock_bh(&is->lock);
-
-			if (classic_is) {
-				spin_lock_bh(&classic_is->lock);
-				classic_is->stat.out_bytes += pkt_len;
-				classic_is->stat.out_packets++;
-				spin_unlock_bh(&classic_is->lock);
-			}
-
-			goto ACCEPT;
-		} else {
-			spin_unlock_bh(&is->lock);
-			goto DROP;
-		}
+		spin_unlock_bh(&is->lock);
+		goto DROP;
 	}
 
 ACCEPT:

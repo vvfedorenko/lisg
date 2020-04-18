@@ -21,8 +21,8 @@
 #define INITIAL_MAX_DURATION 60
 #define MAX_SD_CLASSES       16
 
-#define ISG_DIR_IN    0x01
-#define ISG_DIR_OUT   0x02
+#define ISG_DIR_IN    0x00
+#define ISG_DIR_OUT   0x01
 
 /* From Userspace to Kernel */
 #define	EVENT_LISTENER_REG   0x01
@@ -74,6 +74,11 @@
 #define IS_SESSION_DYING(is) \
 			(is->info.flags & ISG_IS_DYING)
 
+struct isg_session_rate {
+	u_int32_t rate;			/* Policing (rate/burst) info (kbit/s) */
+	u_int32_t burst;
+};
+
 struct isg_session_info {
 	u_int64_t id;
 	u_int8_t cookie[32];
@@ -89,13 +94,10 @@ struct isg_session_info {
 	u_int32_t idle_timeout;
 	u_int32_t max_duration;
 
-	u_int32_t in_rate;			/* Policing (rate/burst) info (kbit/s) */
-	u_int32_t in_burst;
-	u_int32_t out_rate;
-	u_int32_t out_burst;
+	struct isg_session_rate rate[2];			/* Policing (rate/burst) info (kbit/s) */
 };
 
-struct isg_session_stat {
+struct isg_ev_session_stat {
 	u_int32_t duration;		/* Session duration (seconds) */
 	u_int32_t padding;		/* For in_packets field proper alignment on 64-bit systems */
 
@@ -105,22 +107,23 @@ struct isg_session_stat {
 	u_int64_t out_bytes;
 };
 
+struct isg_session_stat {
+	u_int64_t packets;	/* Statistics for session traffic */
+	u_int64_t bytes;
+	u_int64_t tokens;
+	u_int64_t last_seen;
+};
+
 struct isg_session {
+	struct isg_session_stat stat[2]; /* replace with array for every direction */
+
 	spinlock_t lock;
-	struct isg_session_info info;
-	struct isg_session_stat stat;
-
-	u_int64_t in_tokens;
-	u_int64_t out_tokens;
-
-	u_int64_t in_last_seen;
-	u_int64_t out_last_seen;
-
 	time_t start_ktime;
 	time_t last_export;
 
 	struct timer_list timer;
 
+	struct isg_session_info info;
 	unsigned int hash_key;
 	struct hlist_bl_node list;			/* Main list of sessions (isg_hash) */
 	struct isg_service_desc *sdesc;	/* Service description for this sub-session */
@@ -160,7 +163,7 @@ struct isg_in_event {
 struct isg_out_event {
 	u_int32_t type;
 	struct isg_session_info sinfo;
-	struct isg_session_stat sstat;
+	struct isg_ev_session_stat sstat;
 	u_int64_t parent_session_id;	/* Parent session-ID (only for sub-sessions/services) */
 	u_int8_t service_name[32];		/* Service name (only for sub-sessions/services) */
 } __attribute__ ((packed));
