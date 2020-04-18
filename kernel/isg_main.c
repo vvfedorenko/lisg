@@ -28,7 +28,8 @@ static int isg_free_session(struct isg_session *);
 static int isg_clear_session(struct isg_net *, struct isg_in_event *);
 static int isg_update_session(struct isg_net *, struct isg_in_event *);
 static void isg_send_session_count(struct isg_net *, pid_t);
-static void isg_send_event(struct isg_net *, u_int16_t, struct isg_session *, pid_t, int, int);
+static struct sk_buff *isg_send_event(struct isg_net *, u_int16_t, struct isg_session *,
+						pid_t, int, int, struct sk_buff *);
 static void isg_send_event_type(struct isg_net *, pid_t, u_int32_t);
 static int isg_add_service_desc(struct isg_net *, u_int8_t *, u_int8_t *);
 static int isg_apply_service(struct isg_net *, struct isg_in_event *);
@@ -216,10 +217,10 @@ static void isg_nl_receive_skb(struct sk_buff *skb) {
 }
 
 static void isg_nl_receive(struct sk_buff *skb) {
-	mutex_lock(&event_mutex);
+	//mutex_lock(&event_mutex);
 
 	isg_nl_receive_skb(skb);
-	mutex_unlock(&event_mutex);
+	//mutex_unlock(&event_mutex);
 }
 
 static void isg_send_skb(struct isg_net *isg_net, pid_t pid, struct sk_buff *skb) {
@@ -263,9 +264,10 @@ static inline struct isg_ev_session_stat isg_init_ev_stat(struct isg_session *is
 	return res;
 }
 
-static void isg_send_event(struct isg_net *isg_net, u_int16_t type, struct isg_session *is, pid_t pid, int nl_type, int nl_flags) {
+static struct sk_buff *isg_send_event(struct isg_net *isg_net, u_int16_t type,
+			struct isg_session *is, pid_t pid, int nl_type, int nl_flags,
+			struct sk_buff *skb) {
 	struct isg_out_event *ev;
-	struct sk_buff *skb;
 	struct nlmsghdr *nlh;
 	void *nl_data;
 
@@ -279,14 +281,14 @@ static void isg_send_event(struct isg_net *isg_net, u_int16_t type, struct isg_s
 		if (isg_net->listener_pid) {
 			pid = isg_net->listener_pid;
 		} else {
-			return;
+			return skb;
 		}
 	}
 
 	ev = kzalloc(sizeof(struct isg_out_event), GFP_ATOMIC);
 	if (!ev) {
 		printk(KERN_ERR "ipt_ISG: isg_send_event() event allocation failed\n");
-		return;
+		goto alloc_fail;
 	}
 
 	ev->type = type;
@@ -310,18 +312,15 @@ static void isg_send_event(struct isg_net *isg_net, u_int16_t type, struct isg_s
 	}
 
 	if (nl_flags & NLM_F_MULTI) {
-		if (!isg_net->sskb) {
+		if (!skb) {
 			if (!(skb = isg_alloc_skb(isg_net, NLMSG_GOODSIZE)))
 				goto alloc_fail;
-			isg_net->sskb = skb;
 		} else {
-			skb = isg_net->sskb;
 			if (len > skb_tailroom(skb)) {
 				isg_send_skb(isg_net, pid, skb);
 
 				if (!(skb = isg_alloc_skb(isg_net, NLMSG_GOODSIZE)))
 					goto alloc_fail;
-				isg_net->sskb = skb;
 			}
 		}
 	} else {
@@ -348,27 +347,30 @@ static void isg_send_event(struct isg_net *isg_net, u_int16_t type, struct isg_s
 
 	if (nl_type == NLMSG_DONE) {
 		isg_send_skb(isg_net, pid, skb);
-		if ((nl_flags & NLM_F_MULTI) && isg_net->sskb)
-			isg_net->sskb = NULL;
+		skb = NULL;
 	}
 
 	kfree(ev);
 
-	return;
+	return skb;
 
 alloc_fail:
 	printk(KERN_ERR "ipt_ISG: SKB allocation failed\n");
 
-	if (isg_net->sskb) {
-		kfree_skb(isg_net->sskb);
-		isg_net->sskb = NULL;
+	if (skb) {
+		kfree_skb(skb);
+		skb = NULL;
 	}
 
-	kfree(ev);
+	if (ev) {
+		kfree(ev);
+	}
+
+	return skb;
 }
 
 static void isg_send_event_type(struct isg_net *isg_net, pid_t pid, u_int32_t type) {
-	isg_send_event(isg_net, type, NULL, pid, NLMSG_DONE, 0);
+	isg_send_event(isg_net, type, NULL, pid, NLMSG_DONE, 0, NULL);
 }
 
 static inline unsigned int get_isg_hash(u_int32_t val) {
@@ -550,7 +552,7 @@ static struct isg_session *__isg_create_session(struct isg_net *isg_net, u_int32
 
 	hlist_bl_add_head(&is->list, h);
 
-	isg_send_event(isg_net, EVENT_SESS_CREATE, is, 0, NLMSG_DONE, 0);
+	isg_send_event(isg_net, EVENT_SESS_CREATE, is, 0, NLMSG_DONE, 0, NULL);
 
 	return is;
 }
@@ -586,7 +588,7 @@ static inline int isg_start_session(struct isg_session *is) {
 	spin_unlock_bh(&is->lock);
 
 	if (ret)
-		isg_send_event(is->isg_net, EVENT_SESS_START, is, 0, NLMSG_DONE, 0);
+		isg_send_event(is->isg_net, EVENT_SESS_START, is, 0, NLMSG_DONE, 0, NULL);
 
 	return ret;
 }
@@ -654,7 +656,7 @@ static int isg_update_session(struct isg_net *isg_net, struct isg_in_event *ev) 
 	spin_unlock_bh(&is->lock);
 
 	if (ev->type == EVENT_SESS_APPROVE) {
-		isg_send_event(is->isg_net, EVENT_SESS_START, is, 0, NLMSG_DONE, 0);
+		isg_send_event(is->isg_net, EVENT_SESS_START, is, 0, NLMSG_DONE, 0, NULL);
 	}
 
 	return 0;
@@ -685,7 +687,7 @@ static int isg_free_session(struct isg_session *is) {
 
 		hlist_for_each_entry_safe(isrv, n, &is->srv_head, srv_node) {
 			if (IS_SERVICE_ONLINE(isrv)) {
-				isg_send_event(isrv->isg_net, EVENT_SESS_STOP, isrv, 0, NLMSG_DONE, 0);
+				isg_send_event(isrv->isg_net, EVENT_SESS_STOP, isrv, 0, NLMSG_DONE, 0, NULL);
 				isrv->info.flags &= ~ISG_SERVICE_ONLINE;
 			}
 			del_timer(&isrv->timer);
@@ -693,7 +695,7 @@ static int isg_free_session(struct isg_session *is) {
 	}
 
 	if (is->info.flags) {
-		isg_send_event(is->isg_net, EVENT_SESS_STOP, is, 0, NLMSG_DONE, 0);
+		isg_send_event(is->isg_net, EVENT_SESS_STOP, is, 0, NLMSG_DONE, 0, NULL);
 	}
 	mod_timer(&is->timer, jiffies + 2*HZ);
 	return 0;
@@ -783,17 +785,21 @@ static void isg_send_sessions_list(struct isg_net *isg_net, pid_t pid, struct is
 	unsigned int i;
 	struct isg_session *is = NULL;
 	struct hlist_bl_node *l, *n;
+	struct sk_buff *skb = NULL;
 
 	if (ev->si.sinfo.port_number || ev->si.sinfo.id) {
 		is = isg_find_session(isg_net, ev);
-		isg_send_event(isg_net, EVENT_SESS_INFO, is, pid, NLMSG_DONE, 0);
+		isg_send_event(isg_net, EVENT_SESS_INFO, is, pid, NLMSG_DONE, 0, NULL);
 	} else {
 		for (i = 0; i < nr_buckets; i++) {
 			hlist_bl_for_each_entry_safe(is, l, n, &isg_net->hash[i], list) {
-				isg_send_event(isg_net, EVENT_SESS_INFO, is, pid, 0, NLM_F_MULTI);
+				skb = isg_send_event(isg_net, EVENT_SESS_INFO, is, pid, 0, NLM_F_MULTI, skb);
+				if (unlikely(!skb)) {
+					pr_warn("ipt_ISG: Error in allocation while sending session list");
+				}
 			}
 		}
-		isg_send_event(isg_net, EVENT_SESS_INFO, NULL, pid, NLMSG_DONE, NLM_F_MULTI);
+		isg_send_event(isg_net, EVENT_SESS_INFO, NULL, pid, NLMSG_DONE, NLM_F_MULTI, skb);
 	}
 }
 
@@ -822,7 +828,7 @@ static void isg_send_session_count(struct isg_net *isg_net, pid_t pid) {
 	nis->info.ipaddr = current_sess_cnt;
 	nis->info.nat_ipaddr = unapproved_sess_cnt;
 
-	isg_send_event(isg_net, EVENT_SESS_COUNT, nis, pid, NLMSG_DONE, 0);
+	isg_send_event(isg_net, EVENT_SESS_COUNT, nis, pid, NLMSG_DONE, 0, NULL);
 
 	kfree(nis);
 
@@ -830,16 +836,17 @@ static void isg_send_session_count(struct isg_net *isg_net, pid_t pid) {
 
 static void isg_send_services_list(struct isg_net *isg_net, pid_t pid, struct isg_in_event *ev) {
 	struct isg_session *is, *isrv;
+	struct sk_buff *skb = NULL;
 
 	is = isg_find_session(isg_net, ev);
 
 	if (is && !hlist_empty(&is->srv_head)) {
 		hlist_for_each_entry(isrv, &is->srv_head, srv_node) {
-			isg_send_event(isg_net, EVENT_SESS_INFO, isrv, pid, 0, NLM_F_MULTI);
+			skb = isg_send_event(isg_net, EVENT_SESS_INFO, isrv, pid, 0, NLM_F_MULTI, skb);
 		}
 	}
 
-	isg_send_event(isg_net, EVENT_SESS_INFO, NULL, pid, NLMSG_DONE, NLM_F_MULTI);
+	isg_send_event(isg_net, EVENT_SESS_INFO, NULL, pid, NLMSG_DONE, NLM_F_MULTI, skb);
 
 }
 
@@ -940,7 +947,7 @@ static void isg_session_timeout(struct timer_list *arg) {
 			/* Check last export time */
 			} else if (is->info.export_interval && ts_now.tv_sec - is->last_export >= is->info.export_interval) {
 				is->last_export = ts_now.tv_sec;
-				isg_send_event(is->isg_net, EVENT_SESS_UPDATE, is, 0, NLMSG_DONE, 0);
+				isg_send_event(is->isg_net, EVENT_SESS_UPDATE, is, 0, NLMSG_DONE, 0, NULL);
 			}
 		}	
 		mod_timer(&is->timer, jiffies + session_check_interval * HZ);

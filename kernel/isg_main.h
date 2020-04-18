@@ -197,7 +197,6 @@ struct isg_net {
 	struct hlist_head services;
 
 	struct sock *sknl;
-	struct sk_buff *sskb;
 	pid_t listener_pid;
 
 	unsigned long *port_bitmap;
