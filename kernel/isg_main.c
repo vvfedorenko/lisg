@@ -660,16 +660,6 @@ static int isg_update_session(struct isg_net *isg_net, struct isg_in_event *ev) 
 	return 0;
 }
 
-static void _isg_free_session(struct isg_session *is) {
-	if (del_timer(&is->timer) || module_exiting) {
-		/* Timer handler is not running currently */
-		kfree(is);
-	} else {
-		/* Session will be freed by timer's handler */
-		is->info.flags |= ISG_IS_DYING;
-	}
-}
-
 static int isg_free_session(struct isg_session *is) {
 	struct hlist_bl_head *h;
 	struct isg_session *isrv;
