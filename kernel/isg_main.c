@@ -1262,6 +1262,8 @@ void isg_cleanup(struct isg_net *isg_net) {
 	for (i = 0; i < nr_buckets; i++) {
 		hlist_bl_for_each_entry_safe(is, l, c, &isg_net->hash[i], list) {
 			isg_free_session(is);
+			del_timer(&is->timer);
+			kfree(is);
 		}
 	}
 
