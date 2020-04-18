@@ -188,6 +188,12 @@ struct isg_service_desc {
 	struct traffic_class *tcs[MAX_SD_CLASSES];
 };
 
+struct isg_net_stat {
+	atomic_t approved;
+	atomic_t unapproved;
+	atomic_t dying;
+};
+
 struct isg_net {
 	struct hlist_bl_head *hash;
 
@@ -202,6 +208,8 @@ struct isg_net {
 	unsigned long *port_bitmap;
 
 	struct ctl_table_header *sysctl_hdr;
+
+	struct isg_net_stat cnt;
 
 	unsigned int approve_retry_interval;
 	unsigned int tg_permit_action;

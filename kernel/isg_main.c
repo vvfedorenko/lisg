@@ -1243,6 +1243,10 @@ static int isg_initialize(struct net *net) {
 		return -1;
 	}
 
+	atomic_set(&isg_net->cnt.approved, 0);
+	atomic_set(&isg_net->cnt.unapproved, 0);
+	atomic_set(&isg_net->cnt.dying, 0);
+
 	return 0;
 }
 
