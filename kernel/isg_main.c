@@ -811,19 +811,7 @@ static void isg_send_sessions_list(struct isg_net *isg_net, pid_t pid, struct is
 }
 
 static void isg_send_session_count(struct isg_net *isg_net, pid_t pid) {
-	struct isg_session *is, *nis;
-	struct hlist_bl_node *l, *n;
-	unsigned int current_sess_cnt = 0, unapproved_sess_cnt = 0;
-	unsigned int i;
-
-	for (i = 0; i < nr_buckets; i++) {
-		hlist_bl_for_each_entry_safe(is, l, n, &isg_net->hash[i], list) {
-			current_sess_cnt++;
-			if (!is->info.flags) {
-			    unapproved_sess_cnt++;
-			}
-		}
-	}
+	struct isg_session *nis;
 
 	nis = kzalloc(sizeof(struct isg_session), GFP_ATOMIC);
 	if (!nis) {
@@ -832,8 +820,9 @@ static void isg_send_session_count(struct isg_net *isg_net, pid_t pid) {
 	}
 
 	spin_lock_init(&nis->lock);
-	nis->info.ipaddr = current_sess_cnt;
-	nis->info.nat_ipaddr = unapproved_sess_cnt;
+	nis->info.ipaddr = atomic_read(&isg_net->cnt.approved);
+	nis->info.nat_ipaddr = atomic_read(&isg_net->cnt.unapproved);
+	nis->info.port_number = atomic_read(&isg_net->cnt.dying);
 
 	isg_send_event(isg_net, EVENT_SESS_COUNT, nis, pid, NLMSG_DONE, 0, NULL);
 
