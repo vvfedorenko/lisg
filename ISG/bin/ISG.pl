@@ -82,7 +82,7 @@ if ((@ARGV == 2 && $ARGV[0] eq "clear") || (@ARGV == 4 && $ARGV[0] eq "change_ra
 	print "Approved sessions count:\t" . ($act - $unap) . "\n";
 	print "Unapproved sessions count:\t" . $unap ."\n";
 
-} elsif (!defined($ARGV[0]) || (@ARGV == 2 && $ARGV[0] eq "show_services")) {
+} elsif (!defined($ARGV[0]) || (@ARGV == 2 && ($ARGV[0] eq "show_services" || $ARGV[0] eq "show_session"))) {
 	my $slist;
 
 	if (defined($ARGV[0]) && $ARGV[0] eq "show_services") {
@@ -145,6 +145,7 @@ $0 command without any parameters will show all sessions
 
 Commands:
  show_count								Show session counters
+ show_session <IP-address | Virtual# | Session-ID>			Show state for specific session
  show_services <IP-address | Virtual# | Session-ID>			Show services for specific session
  clear <IP-address | Virtual# | Session-ID>				Clear specific session
  change_rate <IP-address | Virtual# | Session-ID> <in_rate out_rate>	Change rate for specific session
