@@ -76,11 +76,12 @@ if ((@ARGV == 2 && $ARGV[0] eq "clear") || (@ARGV == 4 && $ARGV[0] eq "change_ra
 		goto out;
 	}
 
-	my $act  = ISG::ntohl($rev{'ipaddr'});
-	my $unap = ISG::ntohl($rev{'nat_ipaddr'});
-
-	print "Approved sessions count:\t" . ($act - $unap) . "\n";
+	my $act   = ISG::ntohl($rev{'ipaddr'});
+	my $unap  = ISG::ntohl($rev{'nat_ipaddr'});
+	my $dying = ISG::ntohl($rev{'port_number'});
+	print "Approved sessions count:\t" . $act . "\n";
 	print "Unapproved sessions count:\t" . $unap ."\n";
+	print "Dying sessions count:\t" . $dying ."\n";
 
 } elsif (!defined($ARGV[0]) || (@ARGV == 2 && ($ARGV[0] eq "show_services" || $ARGV[0] eq "show_session"))) {
 	my $slist;
