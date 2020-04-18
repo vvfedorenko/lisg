@@ -554,6 +554,8 @@ static struct isg_session *__isg_create_session(struct isg_net *isg_net, u_int32
 
 	isg_send_event(isg_net, EVENT_SESS_CREATE, is, 0, NLMSG_DONE, 0, NULL);
 
+	atomic_inc(&isg_net->cnt.unapproved);
+
 	return is;
 }
 
@@ -652,6 +654,8 @@ static int isg_update_session(struct isg_net *isg_net, struct isg_in_event *ev) 
 		memcpy(is->info.cookie, ev->si.sinfo.cookie, 32);
 		is->info.flags |= ISG_IS_APPROVED;
 		__isg_start_session(is);
+		atomic_inc(&isg_net->cnt.approved);
+		atomic_dec(&isg_net->cnt.unapproved);
 	}
 	spin_unlock_bh(&is->lock);
 
@@ -681,6 +685,9 @@ static int isg_free_session(struct isg_session *is) {
 			clear_bit(is->info.port_number, is->isg_net->port_bitmap);
 		}
 		spin_unlock_bh(&is->lock);
+		atomic_dec(IS_SESSION_APPROVED(is) ? &is->isg_net->cnt.approved
+											: &is->isg_net->cnt.unapproved);
+		atomic_inc(&is->isg_net->cnt.dying);
 	}
 
 	if (!hlist_empty(&is->srv_head)) { /* Freeing sub-sessions also */
@@ -894,7 +901,7 @@ static void isg_session_timeout(struct timer_list *arg) {
 				kfree(isrv);
 			}
 		}
-
+		atomic_dec(&is->isg_net->cnt.dying);
 		kfree(is);
 		return;
 	}
