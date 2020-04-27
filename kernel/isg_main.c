@@ -971,6 +971,7 @@ isg_mt(const struct sk_buff *skb,
 	struct iphdr *iph, _iph;
 	struct isg_session *is, *isrv;
 	struct isg_net *isg_net;
+	struct hlist_node *l;
 	unsigned int shash;
 
 	iph = skb_header_pointer(skb, 0, sizeof(_iph), &_iph);
@@ -994,7 +995,7 @@ isg_mt(const struct sk_buff *skb,
 			goto out;
 		}
 
-		hlist_for_each_entry(isrv, &is->srv_head, srv_node) { /* For each sub-session (service) */
+		hlist_for_each_entry_safe(isrv, l, &is->srv_head, srv_node) { /* For each sub-session (service) */
 			int i;
 
 			if (!(isrv->info.flags & ISG_SERVICE_STATUS_ON) || !(isrv->info.flags & ISG_SERVICE_TAGGER)) {
@@ -1007,16 +1008,15 @@ isg_mt(const struct sk_buff *skb,
 				struct traffic_class *tc = *tc_list;
 		
 				if (ne->tc == tc && !strcmp(isrv->sdesc->name, iinfo->service_name)) {
-					read_unlock_bh(&is->isg_net->nehash_rw_lock);
 					err = 1;
 					goto out;
 				}
 			}
 		}
+out:
 		read_unlock_bh(&is->isg_net->nehash_rw_lock);
 	}
 
-out:
 	return err;
 }
 
