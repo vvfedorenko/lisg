@@ -652,10 +652,12 @@ static int isg_update_session(struct isg_net *isg_net, struct isg_in_event *ev) 
 		is->info.flags |= ISG_IS_SERVICE;
 	} else if (ev->type == EVENT_SESS_APPROVE) {
 		memcpy(is->info.cookie, ev->si.sinfo.cookie, 32);
-		is->info.flags |= ISG_IS_APPROVED;
+		if (!IS_SESSION_APPROVED(is)) {
+			is->info.flags |= ISG_IS_APPROVED;
+			atomic_inc(&isg_net->cnt.approved);
+			atomic_dec(&isg_net->cnt.unapproved);
+		}
 		__isg_start_session(is);
-		atomic_inc(&isg_net->cnt.approved);
-		atomic_dec(&isg_net->cnt.unapproved);
 	}
 	spin_unlock_bh(&is->lock);
 
