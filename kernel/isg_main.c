@@ -531,8 +531,10 @@ static struct isg_session *__isg_create_session(struct isg_net *isg_net, u_int32
 
 	is->info.max_duration = INITIAL_MAX_DURATION;
 
-	port_number = find_next_zero_bit(isg_net->port_bitmap, PORT_BITMAP_SIZE, 1);
-	set_bit(port_number, isg_net->port_bitmap);
+	port_number = find_first_zero_bit(isg_net->port_bitmap, PORT_BITMAP_SIZE);
+	while(test_and_set_bit(port_number, isg_net->port_bitmap)) {
+		port_number = find_next_zero_bit(isg_net->port_bitmap, PORT_BITMAP_SIZE, port_number);
+	}
 	is->info.port_number = port_number;
 
 	if (src_mac) {
