@@ -1040,10 +1040,16 @@ isg_tg(struct sk_buff *skb,
 	struct nehash_entry *ne;
 	struct traffic_class **tc_list;
 	__be32 laddr, raddr;
-	struct isg_net *isg_net, *iisg_net;
+	struct isg_net *isg_net = isg_pernet(dev_net((xt_in(par) != NULL) ?
+				xt_in(par) : xt_out(par))); 
+	struct isg_net *iisg_net;
 	unsigned int shash;
 	int dir;
-
+	const unsigned int action_accept =
+		isg_net->tg_permit_action ? NF_ACCEPT : XT_CONTINUE;
+	const unsigned int action_drop =
+		isg_net->tg_deny_action ? XT_CONTINUE : NF_DROP;
+	unsigned int action;
 
 	u_int32_t pkt_len, pkt_len_bits, rate, burst;
 	struct timespec ts_now;
@@ -1060,8 +1066,6 @@ isg_tg(struct sk_buff *skb,
 	now = timespec_to_ns(&ts_now);
 
 	pkt_len_bits = pkt_len << 3;
-
-	isg_net = isg_pernet(dev_net((xt_in(par) != NULL) ? xt_in(par) : xt_out(par)));
 
 	if (iinfo->flags & INIT_BY_SRC) { /* Init direction */
 		laddr = iph->saddr;
@@ -1091,13 +1095,16 @@ isg_tg(struct sk_buff *skb,
 
 			__isg_create_session(isg_net, laddr, src_mac);
 		} else if (isg_net->pass_outgoing) {
-			goto ACCEPT;
+			action = action_accept;
+			goto unlock_hash;
 		}
-		goto DROP;
+		action = action_drop;
+		goto unlock_hash;
 	}
 
 	if (!is->info.flags) {
-		goto DROP;
+		action = action_drop;
+		goto unlock_hash;
 	}
 
 	prefetchw(is->stat);
@@ -1108,7 +1115,8 @@ isg_tg(struct sk_buff *skb,
 		ne = nehash_lookup(iisg_net, raddr);
 		if (ne == NULL) {
 			read_unlock_bh(&iisg_net->nehash_rw_lock);
-			goto DROP;
+			action = action_drop;
+			goto unlock_hash;
 		}
 
 
@@ -1137,20 +1145,24 @@ isg_tg(struct sk_buff *skb,
 		read_unlock_bh(&iisg_net->nehash_rw_lock);
 		if (!classic_is) {
 			/* This packet not belongs to session's services (or appropriate service's status is not on) */
-			goto DROP;
+			action = action_drop;
+			goto unlock_hash;
 		}
 		prefetchw(is->stat);
 		if (!(is->info.flags & ISG_SERVICE_ONLINE)) {
 			isg_start_session(is);
 		}
 	}
+	hlist_bl_unlock(&isg_net->hash[shash]);
 
+	if (classic_is)
+		prefetchw(classic_is->stat);
+
+	spin_lock_bh(&is->lock);
 	stat = &is->stat[dir];
-	parent_stat = classic_is ? &classic_is->stat[dir] : NULL ;
 	rate = is->info.rate[dir].rate;
 	burst = is->info.rate[dir].burst;
 
-	spin_lock_bh(&is->lock);
 	__isg_update_tokens(stat, now, rate, burst);
 
 	if (pkt_len_bits <= stat->tokens || !rate) {
@@ -1158,38 +1170,29 @@ isg_tg(struct sk_buff *skb,
 
 		stat->bytes += pkt_len;
 		stat->packets++;
-		spin_unlock_bh(&is->lock);
 
-		if (classic_is) {
-			spin_lock_bh(&classic_is->lock);
-			parent_stat->bytes += pkt_len;
-			parent_stat->packets++;
-			spin_unlock_bh(&classic_is->lock);
-		}
-
-		goto ACCEPT;
+		action = action_accept;
 	} else {
-		spin_unlock_bh(&is->lock);
-		goto DROP;
+		action = action_drop;
+	}
+	spin_unlock_bh(&is->lock);
+
+	if (classic_is && action == action_accept) {
+		spin_lock_bh(&classic_is->lock);
+		parent_stat = &classic_is->stat[dir] ;
+		parent_stat->bytes += pkt_len;
+		parent_stat->packets++;
+		spin_unlock_bh(&classic_is->lock);
 	}
 
-ACCEPT:
-	hlist_bl_unlock(&isg_net->hash[shash]);
+out:
 	local_bh_enable();
-	if (!isg_net->tg_permit_action) {
-		return XT_CONTINUE;
-	} else {
-		return NF_ACCEPT;
-	}
+	return action;
 
-DROP:
+unlock_hash:
 	hlist_bl_unlock(&isg_net->hash[shash]);
-	local_bh_enable();
-	if (!isg_net->tg_deny_action) {
-		return NF_DROP;
-	} else {
-		return XT_CONTINUE;
-	}
+	goto out;
+
 }
 
 static int isg_initialize(struct net *net) {
