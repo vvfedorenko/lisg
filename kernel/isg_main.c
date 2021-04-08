@@ -972,16 +972,13 @@ isg_mt(const struct sk_buff *skb,
 	const struct ipt_ISG_mt_info *iinfo = par->targinfo;
 #endif
 	bool err = 0;
-	struct iphdr *iph, _iph;
+	struct iphdr *iph;
 	struct isg_session *is, *isrv;
 	struct isg_net *isg_net;
 	struct hlist_node *l;
 	unsigned int shash;
 
-	iph = skb_header_pointer(skb, 0, sizeof(_iph), &_iph);
-	if (iph == NULL) {
-		return err;
-	}
+	iph = ip_hdr(skb);
 
 	isg_net = isg_pernet(dev_net((xt_in(par) != NULL) ? xt_in(par) : xt_out(par)));
 
@@ -1035,7 +1032,7 @@ isg_tg(struct sk_buff *skb,
 	const struct ipt_ISG_info *iinfo = par->targinfo;
 	struct isg_session_stat *stat, *parent_stat;
 
-	struct iphdr _iph, *iph;
+	struct iphdr *iph;
 	struct isg_session *is, *isrv, *classic_is = NULL;
 	struct nehash_entry *ne;
 	struct traffic_class **tc_list;
@@ -1055,10 +1052,7 @@ isg_tg(struct sk_buff *skb,
 	struct timespec ts_now;
 	u_int64_t now;
 
-	iph = skb_header_pointer(skb, 0, sizeof(_iph), &_iph);
-	if (iph == NULL) {
-		return NF_DROP;
-	}
+	iph = ip_hdr(skb);
 
 	pkt_len = ntohs(iph->tot_len);
 
