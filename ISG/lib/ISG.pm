@@ -227,7 +227,7 @@ sub pack_event {
 
 	} else {
 
-		return pack("I a8 a32 N2 H12 v I8 a32 C",
+		return pack("I a8 a32 N2 H12 V I8 a32 C",
 			$pars->{'type'},
 			$pars->{'session_id'},
 			$pars->{'cookie'},
@@ -288,7 +288,7 @@ sub unpack_event {
 		$p_session_id_hi,
 		$p_session_id_lo,
 		$pars->{'service_name'}
-	) = unpack("I I2 a32 N2 H12 v I8 I i I10 a32", shift);
+	) = unpack("I I2 a32 N2 H12 V I8 I i I10 a32", shift);
 
 	$pars->{'service_name'} =~ s/\000//g;
 	if (!length($pars->{'service_name'})) {

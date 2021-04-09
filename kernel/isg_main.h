@@ -51,28 +51,30 @@
 #define	EVENT_KERNEL_ACK  0x98
 #define	EVENT_KERNEL_NACK 0x99
 
-#define ISG_IS_APPROVED        (1 << 0)
-#define ISG_IS_SERVICE         (1 << 1)
-#define ISG_SERVICE_STATUS_ON  (1 << 2)
-#define ISG_SERVICE_ONLINE     (1 << 3)
-#define ISG_NO_ACCT            (1 << 4)
-#define ISG_IS_DYING           (1 << 5)
-#define ISG_SERVICE_TAGGER     (1 << 6)
+enum isg_service_flags {
+	ISG_IS_APPROVED,
+	ISG_IS_SERVICE,
+	ISG_SERVICE_STATUS_ON,
+	ISG_SERVICE_ONLINE,
+	ISG_NO_ACCT,
+	ISG_IS_DYING,
+	ISG_SERVICE_TAGGER,
+};
 
 #define FLAGS_RW_MASK 0x54 /* (01010100) */
 
 #define IS_SERVICE(is)				\
-			(is->info.flags & ISG_IS_SERVICE)
+			(test_bit(ISG_IS_SERVICE, &is->info.flags))
 
 #define IS_SERVICE_ONLINE(is)			\
 			(IS_SERVICE(is) &&		\
-			is->info.flags & ISG_SERVICE_ONLINE)
+			test_bit(ISG_SERVICE_ONLINE, &is->info.flags))
 
 #define IS_SESSION_APPROVED(is)			\
-			(is->info.flags & ISG_IS_APPROVED)
+			(test_bit(ISG_IS_APPROVED, &is->info.flags))
 
 #define IS_SESSION_DYING(is) \
-			(is->info.flags & ISG_IS_DYING)
+			(test_bit(ISG_IS_DYING, &is->info.flags))
 
 struct isg_session_rate {
 	u_int32_t rate;			/* Policing (rate/burst) info (kbit/s) */
@@ -87,7 +89,7 @@ struct isg_session_info {
 	u_int32_t nat_ipaddr;		/* User's 1-to-1 NAT IP-address */
 	u_int8_t macaddr[ETH_ALEN];	/* User's MAC-address */
 
-	u_int16_t flags;
+	unsigned long flags;
 
 	u_int32_t port_number;		/* Virtual port number for session */
 	u_int32_t export_interval;	/* Session statistics export interval (in seconds) */

@@ -499,7 +499,7 @@ static int isg_apply_service(struct isg_net *isg_net, struct isg_in_event *ev) {
 	mod_timer(&nis->timer, jiffies + session_check_interval * HZ);
 
 	ev->si.sinfo.id = nis->info.id;
-	ev->si.sinfo.flags |= ISG_IS_SERVICE;
+	__set_bit(ISG_IS_SERVICE, &ev->si.sinfo.flags);
 
 	isg_update_session(isg_net, ev);
 
@@ -575,8 +575,8 @@ static int __isg_start_session(struct isg_session *is) {
 	memset(is->stat, 0, 2*sizeof(struct isg_session_stat));
 	is->stat[ISG_DIR_IN].last_seen = timespec_to_ns(&ts_now);
 
-	if (is->info.flags & ISG_IS_SERVICE) {
-		is->info.flags |= ISG_SERVICE_ONLINE;
+	if (IS_SERVICE(is)) {
+		set_bit(ISG_SERVICE_ONLINE, &is->info.flags);
 	}
 
 	mod_timer(&is->timer, jiffies + session_check_interval * HZ);
@@ -651,11 +651,11 @@ static int isg_update_session(struct isg_net *isg_net, struct isg_in_event *ev) 
 	}
 
 	if (ev->type == EVENT_SERV_APPLY) {
-		is->info.flags |= ISG_IS_SERVICE;
+		set_bit(ISG_IS_SERVICE, &is->info.flags);
 	} else if (ev->type == EVENT_SESS_APPROVE) {
 		memcpy(is->info.cookie, ev->si.sinfo.cookie, 32);
 		if (!IS_SESSION_APPROVED(is)) {
-			is->info.flags |= ISG_IS_APPROVED;
+			set_bit(ISG_IS_APPROVED, &is->info.flags);
 			atomic_inc(&isg_net->cnt.approved);
 			atomic_dec(&isg_net->cnt.unapproved);
 		}
@@ -678,17 +678,15 @@ static int isg_free_session(struct isg_session *is) {
 	if (!IS_SERVICE(is)) {
 		isg_log("ipt_ISG: free session %d", is->info.port_number);
 		h = &is->isg_net->hash[is->hash_key];
+		set_bit(ISG_IS_DYING, &is->info.flags);
 		local_bh_disable();
 		hlist_bl_lock(h);
 		hlist_bl_del_init(&is->list);
 		hlist_bl_unlock(h);
 		local_bh_enable();
-		spin_lock_bh(&is->lock);
-		is->info.flags |= ISG_IS_DYING;
 		if (is->info.port_number) {
 			clear_bit(is->info.port_number, is->isg_net->port_bitmap);
 		}
-		spin_unlock_bh(&is->lock);
 		atomic_dec(IS_SESSION_APPROVED(is) ? &is->isg_net->cnt.approved
 											: &is->isg_net->cnt.unapproved);
 		atomic_inc(&is->isg_net->cnt.dying);
@@ -699,7 +697,7 @@ static int isg_free_session(struct isg_session *is) {
 		hlist_for_each_entry_safe(isrv, n, &is->srv_head, srv_node) {
 			if (IS_SERVICE_ONLINE(isrv)) {
 				isg_send_event(isrv->isg_net, EVENT_SESS_STOP, isrv, 0, NLMSG_DONE, 0, NULL);
-				isrv->info.flags &= ~ISG_SERVICE_ONLINE;
+				clear_bit(ISG_SERVICE_ONLINE, &isrv->info.flags);
 			}
 			del_timer(&isrv->timer);
 		}
@@ -770,7 +768,7 @@ static struct isg_session *isg_find_session(struct isg_net *isg_net, struct isg_
 
 	for (i = 0; i < nr_buckets; i++) {
 		hlist_bl_for_each_entry_safe(is, l, c, &isg_net->hash[i], list) {
-			if (ev->si.sinfo.flags & ISG_IS_SERVICE) {
+			if (__test_bit(ISG_IS_SERVICE, &ev->si.sinfo.flags) {
 				/* Searching for sub-session (service) */
 				if (!hlist_empty(&is->srv_head)) {
 					struct isg_session *isrv;
@@ -907,8 +905,8 @@ static void isg_session_timeout(struct timer_list *arg) {
 		/* Check maximum session duration and idle timeout */
 		if ((is->info.max_duration && stat_duration >= is->info.max_duration) ||
 		    (is->info.idle_timeout && ts_now.tv_sec - ts_ls.tv_sec >= is->info.idle_timeout)) {
+			clear_bit(ISG_SERVICE_ONLINE, &is->info.flags);
 			spin_lock_bh(&is->lock);
-			is->info.flags &= ~ISG_SERVICE_ONLINE;
 			get_random_bytes(&(is->info.id), sizeof(is->info.id));
 			is->start_ktime = 0;
 			memset(is->stat, 0, 2*sizeof(struct isg_session_stat));
@@ -999,7 +997,7 @@ isg_mt(const struct sk_buff *skb,
 		hlist_for_each_entry_safe(isrv, l, &is->srv_head, srv_node) { /* For each sub-session (service) */
 			int i;
 
-			if (!(isrv->info.flags & ISG_SERVICE_STATUS_ON) || !(isrv->info.flags & ISG_SERVICE_TAGGER)) {
+			if (!test_bit(ISG_SERVICE_STATUS_ON, &isrv->info.flags) || !test_bit(ISG_SERVICE_TAGGER, &isrv->info.flags)) {
 				continue;
 			}
 
@@ -1117,7 +1115,7 @@ isg_tg(struct sk_buff *skb,
 		hlist_for_each_entry(isrv, &is->srv_head, srv_node) { /* For each sub-session */
 			int i;
 
-			if (!(isrv->info.flags & ISG_SERVICE_STATUS_ON) || isrv->info.flags & ISG_SERVICE_TAGGER) {
+			if (!test_bit(ISG_SERVICE_STATUS_ON, &isrv->info.flags) || test_bit(ISG_SERVICE_TAGGER, &isrv->info.flags)) {
 				continue;
 			}
 
@@ -1143,7 +1141,7 @@ isg_tg(struct sk_buff *skb,
 			goto unlock_hash;
 		}
 		prefetchw(is->stat);
-		if (!(is->info.flags & ISG_SERVICE_ONLINE)) {
+		if (!test_bit(ISG_SERVICE_ONLINE, &is->info.flags)) {
 			isg_start_session(is);
 		}
 	}
