@@ -654,8 +654,7 @@ static int isg_update_session(struct isg_net *isg_net, struct isg_in_event *ev) 
 		set_bit(ISG_IS_SERVICE, &is->info.flags);
 	} else if (ev->type == EVENT_SESS_APPROVE) {
 		memcpy(is->info.cookie, ev->si.sinfo.cookie, 32);
-		if (!IS_SESSION_APPROVED(is)) {
-			set_bit(ISG_IS_APPROVED, &is->info.flags);
+		if (!test_and_set_bit(ISG_IS_APPROVED, &is->info.flags)) {
 			atomic_inc(&isg_net->cnt.approved);
 			atomic_dec(&isg_net->cnt.unapproved);
 		}
@@ -695,9 +694,8 @@ static int isg_free_session(struct isg_session *is) {
 	if (!hlist_empty(&is->srv_head)) { /* Freeing sub-sessions also */
 
 		hlist_for_each_entry_safe(isrv, n, &is->srv_head, srv_node) {
-			if (IS_SERVICE_ONLINE(isrv)) {
+			if (test_and_clear_bit(ISG_SERVICE_ONLINE, &isrv->info.flags)) {
 				isg_send_event(isrv->isg_net, EVENT_SESS_STOP, isrv, 0, NLMSG_DONE, 0, NULL);
-				clear_bit(ISG_SERVICE_ONLINE, &isrv->info.flags);
 			}
 			del_timer(&isrv->timer);
 		}
@@ -768,7 +766,7 @@ static struct isg_session *isg_find_session(struct isg_net *isg_net, struct isg_
 
 	for (i = 0; i < nr_buckets; i++) {
 		hlist_bl_for_each_entry_safe(is, l, c, &isg_net->hash[i], list) {
-			if (__test_bit(ISG_IS_SERVICE, &ev->si.sinfo.flags) {
+			if (test_bit(ISG_IS_SERVICE, &ev->si.sinfo.flags)) {
 				/* Searching for sub-session (service) */
 				if (!hlist_empty(&is->srv_head)) {
 					struct isg_session *isrv;
