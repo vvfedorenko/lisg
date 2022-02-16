@@ -99,7 +99,7 @@ iptables_pkg() {
     PKGLIB=`pkg-config --variable=xtlibdir xtables`
     IPTCFLAGS="-DXTABLES"
   else
-    IPTCFLAGS="-I$KDIR/include -DIPTABLES_VERSION=\\\\\"$IPTVER\\\\\""
+    IPTCFLAGS="-I$KDIR/include -DIPTABLES_VERSION=\"$IPTVER\""
   fi
 }
 
