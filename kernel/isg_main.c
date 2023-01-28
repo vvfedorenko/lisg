@@ -137,11 +137,12 @@ static void isg_nl_receive_skb(struct sk_buff *skb) {
 
 	struct isg_net *isg_net = isg_pernet(sock_net(skb->sk));
 
-	switch (ev->type) {
+	switch (ev->type & 0xFF) {
 		int type;
 
 		case EVENT_LISTENER_REG:
 			isg_net->listener_pid = from_pid;
+			isg_net->listener_ver = (u8)((ev->type & 0xFF00) >> 8);
 			printk(KERN_INFO "ipt_ISG: Listener daemon with pid %d registered\n", from_pid);
 			break;
 
@@ -274,9 +275,6 @@ static struct sk_buff *isg_send_event(struct isg_net *isg_net, u_int16_t type,
 	int data_size = sizeof(struct isg_out_event);
 	int len = NLMSG_SPACE(data_size);
 
-	struct timespec ts_now;
-	ktime_get_ts(&ts_now);
-
 	if (pid == 0) {
 		if (isg_net->listener_pid) {
 			pid = isg_net->listener_pid;
@@ -294,11 +292,11 @@ static struct sk_buff *isg_send_event(struct isg_net *isg_net, u_int16_t type,
 	ev->type = type;
 
 	if (is) {
-		ev->sinfo = is->info;
+		isg_session_info_v0_fill(&ev->sinfo, &is->info);
 		ev->sstat = isg_init_ev_stat(is);
 
 		if (is->start_ktime) {
-			ev->sstat.duration = ts_now.tv_sec - is->start_ktime;
+			ev->sstat.duration = (u32)div_u64(ktime_get_mono_fast_ns() - is->start_ktime, NSEC_PER_SEC);
 		}
 
 		if (is->parent_is) {
@@ -511,9 +509,6 @@ static struct isg_session *__isg_create_session(struct isg_net *isg_net, u_int32
 	struct isg_session *is;
 	struct hlist_bl_head *h;
 	unsigned int port_number, shash;
-	struct timespec ts_now;
-
-	ktime_get_ts(&ts_now);
 
 	is = kzalloc(sizeof(struct isg_session), GFP_ATOMIC);
 	if (!is) {
@@ -526,7 +521,7 @@ static struct isg_session *__isg_create_session(struct isg_net *isg_net, u_int32
 	INIT_HLIST_HEAD(&is->srv_head);
 	is->hash_key = shash;
 	is->info.ipaddr = ipaddr;
-	is->start_ktime = ts_now.tv_sec;
+	is->start_ktime = ktime_get_mono_fast_ns();
 	is->isg_net = isg_net;
 
 	is->info.max_duration = INITIAL_MAX_DURATION;
@@ -562,18 +557,18 @@ static struct isg_session *__isg_create_session(struct isg_net *isg_net, u_int32
 }
 
 static int __isg_start_session(struct isg_session *is) {
-	struct timespec ts_now;
+	u64 ns_now;
 
 	if (IS_SESSION_DYING(is))
 		return 0;
-	ktime_get_ts(&ts_now);
+	ns_now = ktime_get_mono_fast_ns();
 
 	isg_log("ipt_ISG: start session Virtual%d", is->info.port_number);
 
-	is->start_ktime = is->last_export = ts_now.tv_sec;
+	is->start_ktime = is->last_export = ns_now;
 
 	memset(is->stat, 0, 2*sizeof(struct isg_session_stat));
-	is->stat[ISG_DIR_IN].last_seen = timespec_to_ns(&ts_now);
+	is->stat[ISG_DIR_IN].last_seen = ns_now;
 
 	if (IS_SERVICE(is)) {
 		set_bit(ISG_SERVICE_ONLINE, &is->info.flags);
@@ -627,15 +622,15 @@ static int isg_update_session(struct isg_net *isg_net, struct isg_in_event *ev) 
 	}
 
 	if (ev->si.sinfo.export_interval) {
-		is->info.export_interval = ev->si.sinfo.export_interval;
+		is->info.export_interval = (u64)(ev->si.sinfo.export_interval * NSEC_PER_SEC);
 	}
 
 	if (ev->si.sinfo.idle_timeout) {
-		is->info.idle_timeout = ev->si.sinfo.idle_timeout;
+		is->info.idle_timeout = (u64)(ev->si.sinfo.idle_timeout * NSEC_PER_SEC);
 	}
 
 	if (ev->si.sinfo.max_duration) {
-		is->info.max_duration = ev->si.sinfo.max_duration;
+		is->info.max_duration = (u64)(ev->si.sinfo.max_duration * NSEC_PER_SEC);
 	}
 
 	if (ev->si.sinfo.flags) {
@@ -870,17 +865,15 @@ static void isg_session_timeout(unsigned long arg) {
 static void isg_session_timeout(struct timer_list *arg) {
 	struct isg_session *is = from_timer(is, arg, timer);
 #endif
-	struct timespec ts_now;
-	struct timespec ts_ls;
+	u64 ns_now, stat_duration, idle_sec;
 	struct isg_session *isrv;
 	struct hlist_node *l;
-	u_int32_t stat_duration;
-
-	ktime_get_ts(&ts_now);
 
 	if (module_exiting) {
 		return;
 	}
+
+	ns_now = ktime_get_mono_fast_ns();
 
 	if (IS_SESSION_DYING(is)) {
 		isg_log("ipt_ISG: Virtual%d ISG_IS_DYING, freeing", is->info.port_number);
@@ -895,14 +888,14 @@ static void isg_session_timeout(struct timer_list *arg) {
 		return;
 	}
 
-	stat_duration = ts_now.tv_sec - is->start_ktime;
+	stat_duration = div_u64((ns_now - is->start_ktime), NSEC_PER_SEC);
+	idle_sec = div_u64(is->stat[ISG_DIR_IN].last_seen, NSEC_PER_SEC);
 
-	if (IS_SERVICE_ONLINE(is)) {
-		ts_ls = ns_to_timespec(is->stat[ISG_DIR_IN].last_seen);
+	if (IS_SERVICE_ONLINE(is)) { /* Service timeout */
 
 		/* Check maximum session duration and idle timeout */
 		if ((is->info.max_duration && stat_duration >= is->info.max_duration) ||
-		    (is->info.idle_timeout && ts_now.tv_sec - ts_ls.tv_sec >= is->info.idle_timeout)) {
+		    (is->info.idle_timeout && idle_sec >= is->info.idle_timeout)) {
 			clear_bit(ISG_SERVICE_ONLINE, &is->info.flags);
 			spin_lock_bh(&is->lock);
 			get_random_bytes(&(is->info.id), sizeof(is->info.id));
@@ -913,7 +906,7 @@ static void isg_session_timeout(struct timer_list *arg) {
 			/* session service is active */
 			mod_timer(&is->timer, jiffies + session_check_interval * HZ);
 		}
-	} else if (!IS_SERVICE(is)) { /* Unapproved session */
+	} else if (!IS_SERVICE(is)) { /* Session timeout */
 
 		//call something like isg_free_session
 		if (!is->info.flags && stat_duration >= is->info.max_duration) {
@@ -930,19 +923,20 @@ static void isg_session_timeout(struct timer_list *arg) {
 					is->stat[ISG_DIR_OUT].last_seen = max(is->stat[ISG_DIR_OUT].last_seen,
 									isrv->stat[ISG_DIR_OUT].last_seen);
 				}
+				/* Service might have been seen later. TODO: update seesion to last service */
+				idle_sec = div_u64(is->stat[ISG_DIR_IN].last_seen, NSEC_PER_SEC);
 			}
 
-			ts_ls = ns_to_timespec(is->stat[ISG_DIR_IN].last_seen);
 			spin_unlock_bh(&is->lock);
 
 			/* Check maximum session duration and idle timeout */
 			if ((is->info.max_duration && stat_duration >= is->info.max_duration) ||
-				(is->info.idle_timeout && ts_now.tv_sec - ts_ls.tv_sec >= is->info.idle_timeout)) {
+				(is->info.idle_timeout && idle_sec >= is->info.idle_timeout)) {
 				isg_free_session(is);
 				goto out;
 			/* Check last export time */
-			} else if (is->info.export_interval && ts_now.tv_sec - is->last_export >= is->info.export_interval) {
-				is->last_export = ts_now.tv_sec;
+			} else if (is->info.export_interval && ns_now - is->last_export >= (is->info.export_interval * NSEC_PER_SEC)) {
+				is->last_export = ns_now;
 				isg_send_event(is->isg_net, EVENT_SESS_UPDATE, is, 0, NLMSG_DONE, 0, NULL);
 			}
 		}	
@@ -1045,15 +1039,13 @@ isg_tg(struct sk_buff *skb,
 	unsigned int action;
 
 	u_int32_t pkt_len, pkt_len_bits, rate, burst;
-	struct timespec ts_now;
-	u_int64_t now;
+	u64 now;
 
 	iph = ip_hdr(skb);
 
 	pkt_len = ntohs(iph->tot_len);
 
-	ktime_get_ts(&ts_now);
-	now = timespec_to_ns(&ts_now);
+	now = ktime_get_mono_fast_ns();
 
 	pkt_len_bits = pkt_len << 3;
 
