@@ -129,23 +129,28 @@ struct isg_ev_session_stat {
 };
 
 struct isg_session_stat {
+	spinlock_t lock;
+	u8  pad0[4];
 	u64 packets;		/* Statistics for session traffic */
 	u64 bytes;
 	u64 tokens;
 	u64 last_seen;
+	u64 pad1[3];
 };
 
 struct isg_session {
 	struct isg_session_stat stat[2]; /* replace with array for every direction */
 
-	spinlock_t lock;
 	u64 start_ktime;
 	u64 last_export;
-
+	unsigned int hash_key;
 	struct timer_list timer;
 
+
 	struct isg_session_info info;
-	unsigned int hash_key;
+	spinlock_t lock;
+
+	struct isg_net *isg_net;
 	struct hlist_bl_node list;		/* Main list of sessions (isg_hash) */
 	struct isg_service_desc *sdesc;		/* Service description for this sub-session */
 	struct isg_session *parent_is;		/* Parent session (only for sub-sessions/services) */
@@ -153,7 +158,6 @@ struct isg_session {
 	struct hlist_head srv_head;		/* This session sub-sessions (services) list */
 	struct hlist_node srv_node;
 
-	struct isg_net *isg_net;
 };
 
 #define FLAG_OP_SET   0x01

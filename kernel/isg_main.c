@@ -478,6 +478,8 @@ static int isg_apply_service(struct isg_net *isg_net, struct isg_in_event *ev) {
 	}
 
 	spin_lock_init(&nis->lock);
+	spin_lock_init(&nis->stat[0].lock);
+	spin_lock_init(&nis->stat[1].lock);
 
 	nis->parent_is = is;
 	nis->info = is->info;
@@ -518,6 +520,8 @@ static struct isg_session *__isg_create_session(struct isg_net *isg_net, u_int32
 	shash = get_isg_hash(ipaddr);
 	h = &isg_net->hash[shash];
 	spin_lock_init(&is->lock);
+	spin_lock_init(&is->stat[0].lock);
+	spin_lock_init(&is->stat[1].lock);
 	INIT_HLIST_HEAD(&is->srv_head);
 	is->hash_key = shash;
 	is->info.ipaddr = ipaddr;
@@ -842,12 +846,13 @@ static void isg_send_services_list(struct isg_net *isg_net, pid_t pid, struct is
 }
 
 /* MUST be called under session spinlock locked */
-static inline void __isg_update_tokens(struct isg_session_stat *iss, u_int64_t now,
-			u_int32_t rate, u_int32_t burst)
+static inline void __isg_update_tokens(struct isg_session_stat *iss, u64 now,
+			u32 rate, u32 burst)
 {
-	u_int64_t tokens;
+	u64 tokens, ns_after;
 
-	tokens = div_s64(rate * (now - iss->last_seen), NSEC_PER_SEC);
+	ns_after = now > iss->last_seen ? now - iss->last_seen : 0;
+	tokens = div_u64(rate * ns_after, (u64)NSEC_PER_SEC);
 
 	if ((iss->tokens + tokens) > burst) {
 		iss->tokens = burst;
@@ -855,7 +860,7 @@ static inline void __isg_update_tokens(struct isg_session_stat *iss, u_int64_t n
 		iss->tokens += tokens;
 	}
 
-	iss->last_seen = now;
+	iss->last_seen += ns_after;
 }
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4,14,0)
@@ -1045,9 +1050,9 @@ isg_tg(struct sk_buff *skb,
 		isg_net->tg_permit_action ? NF_ACCEPT : XT_CONTINUE;
 	const unsigned int action_drop =
 		isg_net->tg_deny_action ? XT_CONTINUE : NF_DROP;
-	unsigned int action;
+	unsigned int action = action_drop;
 
-	u_int32_t pkt_len, pkt_len_bits, rate, burst;
+	u32 pkt_len, pkt_len_bits, rate, burst;
 	u64 now;
 
 	iph = ip_hdr(skb);
@@ -1075,6 +1080,7 @@ isg_tg(struct sk_buff *skb,
 	is = isg_lookup_session_hash(isg_net, laddr, shash);
 
 	if (is == NULL) {
+		/* assume action = action_drop; */
 		if (iinfo->flags & INIT_SESSION) {
 			u_int8_t *src_mac = NULL;
 
@@ -1087,27 +1093,26 @@ isg_tg(struct sk_buff *skb,
 			__isg_create_session(isg_net, laddr, src_mac);
 		} else if (isg_net->pass_outgoing) {
 			action = action_accept;
-			goto unlock_hash;
 		}
-		action = action_drop;
 		goto unlock_hash;
 	}
+	hlist_bl_unlock(&isg_net->hash[shash]);
 
 	if (!is->info.flags) {
-		action = action_drop;
-		goto unlock_hash;
+		/* assume action = action_drop; */
+		goto out;
 	}
 
 	prefetchw(is->stat);
-	if (!hlist_empty(&is->srv_head)) {
+	if (unlikely(!hlist_empty(&is->srv_head))) {
 		/* This session is having sub-sessions, try to classify */
 		iisg_net = is->isg_net;
 		read_lock_bh(&iisg_net->nehash_rw_lock);
 		ne = nehash_lookup(iisg_net, raddr);
 		if (ne == NULL) {
 			read_unlock_bh(&iisg_net->nehash_rw_lock);
-			action = action_drop;
-			goto unlock_hash;
+			/* assume action = action_drop; */
+			goto out;
 		}
 
 
@@ -1136,24 +1141,23 @@ isg_tg(struct sk_buff *skb,
 		read_unlock_bh(&iisg_net->nehash_rw_lock);
 		if (!classic_is) {
 			/* This packet not belongs to session's services (or appropriate service's status is not on) */
-			action = action_drop;
-			goto unlock_hash;
+			/* assume action = action_drop; */
+			goto out;
 		}
 		prefetchw(is->stat);
 		if (!test_bit(ISG_SERVICE_ONLINE, &is->info.flags)) {
 			isg_start_session(is);
 		}
 	}
-	hlist_bl_unlock(&isg_net->hash[shash]);
 
-	if (classic_is)
-		prefetchw(classic_is->stat);
+	stat = &is->stat[dir];
 
 	spin_lock_bh(&is->lock);
-	stat = &is->stat[dir];
 	rate = is->info.rate[dir].rate;
 	burst = is->info.rate[dir].burst;
+	spin_unlock_bh(&is->lock);
 
+	spin_lock_bh(&stat->lock);
 	__isg_update_tokens(stat, now, rate, burst);
 
 	if (pkt_len_bits <= stat->tokens || !rate) {
@@ -1163,17 +1167,16 @@ isg_tg(struct sk_buff *skb,
 		stat->packets++;
 
 		action = action_accept;
-	} else {
-		action = action_drop;
 	}
-	spin_unlock_bh(&is->lock);
+	/* default action drop */
+	spin_unlock_bh(&stat->lock);
 
 	if (classic_is && action == action_accept) {
-		spin_lock_bh(&classic_is->lock);
-		parent_stat = &classic_is->stat[dir] ;
+		stat = &classic_is->stat[dir];
+		spin_lock_bh(&stat->lock);
 		parent_stat->bytes += pkt_len;
 		parent_stat->packets++;
-		spin_unlock_bh(&classic_is->lock);
+		spin_unlock_bh(&stat->lock);
 	}
 
 out:
