@@ -13,7 +13,8 @@
 #include "isg.h"
 
 static const struct option opts[] = {
-	{ .name = "service-name", .has_arg = true, .val = '1' },
+	{ .name = "service-name", 	.has_arg = true,  .val = '1' },
+	{ .name = "active-no-services",	.has_arg = false, .val = '2' },
 	{ }
 };
 
@@ -22,7 +23,9 @@ static void help(void) {
 "ISG match options:\n"
 " --service-name <name>		Check session service name:\n"
 "				 name - serivce name to check\n"
-"				        not more than 32 charactes\n");
+"				        not more than 32 charactes\n"
+" --active-no-services		Check whether session is authorized\n"
+"				 and has no services added");
 }
 
 static int parse(int c, char **argv, int invert, unsigned int *flags,
@@ -35,6 +38,9 @@ static int parse(int c, char **argv, int invert, unsigned int *flags,
 			if (*flags & INIT_SESSION) {
 				xtables_error(PARAMETER_PROBLEM, "Can't specify --service-name twice\n");
 			}
+			if (*flags & ACTIVE_SESSION) {
+				xtables_error(PARAMETER_PROBLEM, "Can't specify --service-name with --active-no-services\n");
+			}
 			if (invert) {
 				xtables_error(PARAMETER_PROBLEM, "Can't invert --service-name value\n");
 			}
@@ -44,7 +50,13 @@ static int parse(int c, char **argv, int invert, unsigned int *flags,
 			*flags |= INIT_SESSION;
 			strncpy(isg->service_name, optarg, strnlen(optarg, MAX_SERVICE_NAME));
 			break;
-
+		case '2':
+			if (*flags & INIT_SESSION) {
+				xtables_error(PARAMETER_PROBLEM, "Can't specify --service-name with --active-no-services\n");
+			}
+			*flags |= ACTIVE_SESSION;
+			isg->flags |= invert ? INACTIVE_SESSION : ACTIVE_SESSION;
+			break;
 		default:
 			return 0;
 	}
@@ -55,7 +67,10 @@ static int parse(int c, char **argv, int invert, unsigned int *flags,
 static void save(const void *ip, const struct xt_entry_match *match) {
 	struct ipt_ISG_mt_info *isg = (struct ipt_ISG_mt_info *)match->data;
 
-	printf(" --service-name %.32s", isg->service_name);
+	if (isg->flags)
+		printf(" --active-no-services");
+	else
+		printf(" --service-name %.32s", isg->service_name);
 }
 
 static void print(const void *ip,
@@ -63,13 +78,15 @@ static void print(const void *ip,
                   int numeric) {
 
 	struct ipt_ISG_mt_info *isg = (struct ipt_ISG_mt_info *)match->data;
-
-	printf("isg match service %.32s ", isg->service_name);
+	if (isg->flags)
+		printf("isg match active session with no services");
+	else
+		printf("isg match service %.32s ", isg->service_name);
 }
 
 static void check(unsigned int flags) {
 	if (!flags) {
-		xtables_error(PARAMETER_PROBLEM, "Service name must be specified with --service-name parameter\n");
+		xtables_error(PARAMETER_PROBLEM, "Service name must be specified with --service-name or --active-no-services parameter\n");
 	}
 }
 

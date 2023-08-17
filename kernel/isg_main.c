@@ -975,8 +975,17 @@ isg_mt(const struct sk_buff *skb,
 	shash = get_isg_hash(iph->saddr);
 
 	is = isg_lookup_session_hash(isg_net, iph->saddr, shash);
+	if (!is)
+		return 0;
 
-	if (is && !hlist_empty(&is->srv_head)) {
+	if (iinfo->flags) {
+		if (!hlist_empty(&is->srv_head))
+			return 0;
+		if (IS_SESSION_APPROVED(is) == !!(iinfo->flags & ACTIVE_SESSION))
+			return 1;
+	}
+
+	if (!hlist_empty(&is->srv_head)) {
 		struct nehash_entry *ne;
 		struct traffic_class **tc_list;
 
