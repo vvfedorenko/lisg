@@ -22,7 +22,7 @@ use constant NL_HDR_LEN        => 16;
 use constant NLMSG_ALIGNTO     => 4;
 use constant NLMSG_DONE        => 0x3;
 use constant NLM_F_MULTI       => 0x2;
-use constant IN_EVENT_MSG_LEN  => 172;
+use constant IN_EVENT_MSG_LEN  => 184;
 
 use constant EVENT_LISTENER_REG  => 0x01;
 use constant EVENT_SESS_APPROVE  => 0x04;
@@ -209,8 +209,9 @@ sub pack_event {
 
 	if ($pars->{'type'} == ISG::EVENT_SDESC_ADD) {
 
-		return pack("I a32 a32 C a23",
+		return pack("I a4 a32 a32 C a7",
 			$pars->{'type'},
+			0,
 			$pars->{'nehash_tc_name'},
 			$pars->{'service_name'},
 			$pars->{'service_flags'}
@@ -218,8 +219,9 @@ sub pack_event {
 
 	} elsif ($pars->{'type'} == ISG::EVENT_NE_ADD_QUEUE) {
 
-		return pack("I N2 a32 a48",
+		return pack("I a4 N2 a32 a48",
 			$pars->{'type'},
+			0,
 			$pars->{'nehash_pfx'},
 			$pars->{'nehash_mask'},
 			$pars->{'nehash_tc_name'}
@@ -227,13 +229,14 @@ sub pack_event {
 
 	} else {
 
-		return pack("I a8 a32 N2 H12 V I8 a32 C",
+		return pack("I a4 a8 a32 N2 a12 V I8 a32 Ci a7",
 			$pars->{'type'},
+			0, # padding
 			$pars->{'session_id'},
 			$pars->{'cookie'},
 			$pars->{'ipaddr'},
 			$pars->{'nat_ipaddr'},
-			0, # MAC-Address is read-only
+			0, # MAC-Address is read-only plus pad
 			$pars->{'flags'},
 			$pars->{'port_number'},
 			$pars->{'alive_interval'},
@@ -252,7 +255,7 @@ sub pack_event {
 sub unpack_event {
 	my $pars;
 
-	my $trash;
+	my ($trash0, $trash1, $trash2);
 	my ($in_packets_lo, $in_packets_hi, $out_packets_lo, $out_packets_hi);
 	my ($in_bytes_lo, $in_bytes_hi, $out_bytes_lo, $out_bytes_hi);
 	my ($session_id_hi, $session_id_lo);
@@ -260,12 +263,14 @@ sub unpack_event {
 
 	(
 		$pars->{'type'},
+		$trash0, # pad in isg_out_event
 		$session_id_hi,
 		$session_id_lo,
 		$pars->{'cookie'},
 		$pars->{'ipaddr'},
 		$pars->{'nat_ipaddr'},
 		$pars->{'macaddr'},
+		$trash1, # pad in isg_session_info_v0
 		$pars->{'flags'},
 		$pars->{'port_number'},
 		$pars->{'alive_interval'},
@@ -276,7 +281,7 @@ sub unpack_event {
 		$pars->{'out_rate'},
 		$pars->{'out_burst'},
 		$pars->{'duration'},
-		$trash, # Padding
+		$trash2, # Padding
 		$in_packets_hi,
 		$in_packets_lo,
 		$in_bytes_hi,
@@ -288,7 +293,7 @@ sub unpack_event {
 		$p_session_id_hi,
 		$p_session_id_lo,
 		$pars->{'service_name'}
-	) = unpack("I I2 a32 N2 H12 V I8 I i I10 a32", shift);
+	) = unpack("I a4 I2 a32 N2 H12 a6 V I8 I i I10 a32", shift);
 
 	$pars->{'service_name'} =~ s/\000//g;
 	if (!length($pars->{'service_name'})) {

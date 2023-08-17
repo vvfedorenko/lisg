@@ -89,8 +89,8 @@ struct isg_session_info_v0 {
 	u32 ipaddr;			/* User's IP-address */
 	u32 nat_ipaddr;			/* User's 1-to-1 NAT IP-address */
 	u8 macaddr[ETH_ALEN];		/* User's MAC-address */
-
-	unsigned long flags;
+	u8 pad0[2];			/* Pad to 4 bytes boundary */
+	unsigned long flags;		/* Must be unsigned long to proper use bit-ops */
 
 	u32 port_number;		/* Virtual port number for session */
 	u32 export_interval;		/* Session statistics export interval (in nanoseconds) */
@@ -107,10 +107,10 @@ struct isg_session_info {
 	u32 ipaddr;			/* User's IP-address */
 	u32 nat_ipaddr;			/* User's 1-to-1 NAT IP-address */
 	u8 macaddr[ETH_ALEN];		/* User's MAC-address */
-
-	u32 flags;
-
+	u8 pad0[6];			/* Pad to 8 bytes boundary */
 	u32 port_number;		/* Virtual port number for session */
+	unsigned long flags;		/* Must be unsigned long to proper use bit-ops */
+
 	u64 export_interval;		/* Session statistics export interval (in nanoseconds) */
 	u64 idle_timeout;		/* Session idle timeout (in nanoseconds) */
 	u64 max_duration;		/* Max session duration time (in nanoseconds) */
@@ -162,7 +162,9 @@ struct isg_session {
 static inline
 void isg_session_info_v0_fill(struct isg_session_info_v0 *out, struct isg_session_info *in)
 {
-	memcpy(out, in, offsetof(struct isg_session_info, export_interval));
+	memcpy(out, in, offsetof(struct isg_session_info, pad0));
+	out->flags = in->flags;
+	out->port_number = in->port_number;
 	out->export_interval = (u32)div_u64(in->export_interval, NSEC_PER_SEC);
 	out->idle_timeout = (u32)div_u64(in->idle_timeout, NSEC_PER_SEC);
 	out->max_duration = (u32)div_u64(in->max_duration, NSEC_PER_SEC);
@@ -172,7 +174,9 @@ void isg_session_info_v0_fill(struct isg_session_info_v0 *out, struct isg_sessio
 static inline
 void isg_session_info_v1_fill(struct isg_session_info *out, struct isg_session_info_v0 *in)
 {
-	memcpy(out, in, offsetof(struct isg_session_info, export_interval));
+	memcpy(out, in, offsetof(struct isg_session_info, pad0));
+	out->flags = in->flags;
+	out->port_number = in->port_number;
 	out->export_interval = (u64)(in->export_interval * NSEC_PER_SEC);
 	out->idle_timeout = (u64)(in->idle_timeout * NSEC_PER_SEC);
 	out->max_duration = (u64)(in->max_duration * NSEC_PER_SEC);
@@ -181,11 +185,13 @@ void isg_session_info_v1_fill(struct isg_session_info *out, struct isg_session_i
 
 struct isg_in_event {
 	u32 type;
+	u8 pad[4];
 	union {
 		struct isg_session_info_in {
 			struct isg_session_info_v0 sinfo;
 			u8 service_name[32];
 			u8 flags_op;
+			u8 pad[7];
 		} si;
 
 		struct nehash_entry_in {
@@ -198,12 +204,14 @@ struct isg_in_event {
 			u8 tc_name[32];
 			u8 service_name[32];
 			u8 flags;
+			u8 pad[7];
 		} sdesc;
 	};
 };
 
 struct isg_out_event {
 	u32 type;
+	u8 pad[4];
 	struct isg_session_info_v0 sinfo;
 	struct isg_ev_session_stat sstat;
 	u64 parent_session_id;		/* Parent session-ID (only for sub-sessions/services) */
@@ -212,6 +220,7 @@ struct isg_out_event {
 
 struct isg_out_event_v1 {
 	u32 type;
+	u8 pad[4];
 	struct isg_session_info sinfo;
 	struct isg_ev_session_stat sstat;
 	u64 parent_session_id;		/* Parent session-ID (only for sub-sessions/services) */
