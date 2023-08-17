@@ -252,17 +252,19 @@ struct isg_service_desc {
 };
 
 struct isg_net_stat {
-	atomic_t approved;
-	atomic_t unapproved;
-	atomic_t dying;
+	int approved;
+	int unapproved;
+	int dying;
 };
 
 struct isg_net {
 	struct hlist_bl_head *hash;
 
+	rwlock_t nehash_rw_lock;
 	struct hlist_head *nehash;
 	struct hlist_head nehash_queue;
 	struct hlist_head traffic_class;
+	rwlock_t services_rw_lock;
 	struct hlist_head services;
 
 	struct sock *sknl;
@@ -273,14 +275,12 @@ struct isg_net {
 
 	struct ctl_table_header *sysctl_hdr;
 
-	struct isg_net_stat cnt;
+	struct isg_net_stat __percpu *cnt;
 
 	unsigned int approve_retry_interval;
 	unsigned int tg_permit_action;
 	unsigned int tg_deny_action;
 	unsigned int pass_outgoing;
-	rwlock_t nehash_rw_lock;
-	rwlock_t services_rw_lock;
 };
 
 extern unsigned int nehash_key_len;

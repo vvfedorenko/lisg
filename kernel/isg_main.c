@@ -508,9 +508,10 @@ static int isg_apply_service(struct isg_net *isg_net, struct isg_in_event *ev) {
 }
 /* MUST be called under hlist lock */
 static struct isg_session *__isg_create_session(struct isg_net *isg_net, u_int32_t ipaddr, u_int8_t *src_mac) {
-	struct isg_session *is;
-	struct hlist_bl_head *h;
 	unsigned int port_number, shash;
+	struct isg_net_stat *cnt;
+	struct hlist_bl_head *h;
+	struct isg_session *is;
 
 	is = kzalloc(sizeof(struct isg_session), GFP_ATOMIC);
 	if (!is) {
@@ -555,7 +556,8 @@ static struct isg_session *__isg_create_session(struct isg_net *isg_net, u_int32
 
 	isg_send_event(isg_net, EVENT_SESS_CREATE, is, 0, NLMSG_DONE, 0, NULL);
 
-	atomic_inc(&isg_net->cnt.unapproved);
+	cnt = this_cpu_ptr(isg_net->cnt);
+	cnt->unapproved++;
 
 	return is;
 }
@@ -598,6 +600,7 @@ static inline int isg_start_session(struct isg_session *is) {
 
 
 static int isg_update_session(struct isg_net *isg_net, struct isg_in_event *ev) {
+	struct isg_net_stat *cnt;
 	struct isg_session *is;
 
 	is = isg_find_session(isg_net, ev);
@@ -654,8 +657,9 @@ static int isg_update_session(struct isg_net *isg_net, struct isg_in_event *ev) 
 	} else if (ev->type == EVENT_SESS_APPROVE) {
 		memcpy(is->info.cookie, ev->si.sinfo.cookie, 32);
 		if (!test_and_set_bit(ISG_IS_APPROVED, &is->info.flags)) {
-			atomic_inc(&isg_net->cnt.approved);
-			atomic_dec(&isg_net->cnt.unapproved);
+			cnt = this_cpu_ptr(isg_net->cnt);
+			cnt->approved++;
+			cnt->unapproved--;
 		}
 		__isg_start_session(is);
 	}
@@ -669,6 +673,7 @@ static int isg_update_session(struct isg_net *isg_net, struct isg_in_event *ev) 
 }
 
 static int isg_free_session(struct isg_session *is) {
+	struct isg_net_stat *cnt;
 	struct hlist_bl_head *h;
 	struct isg_session *isrv;
 	struct hlist_node *n;
@@ -685,9 +690,10 @@ static int isg_free_session(struct isg_session *is) {
 		if (is->info.port_number) {
 			clear_bit(is->info.port_number, is->isg_net->port_bitmap);
 		}
-		atomic_dec(IS_SESSION_APPROVED(is) ? &is->isg_net->cnt.approved
-											: &is->isg_net->cnt.unapproved);
-		atomic_inc(&is->isg_net->cnt.dying);
+		cnt = this_cpu_ptr(is->isg_net->cnt);
+		cnt->approved -= !!IS_SESSION_APPROVED(is);
+		cnt->unapproved -= !IS_SESSION_APPROVED(is);
+		cnt->dying++;
 	}
 
 	if (!hlist_empty(&is->srv_head)) { /* Freeing sub-sessions also */
@@ -811,6 +817,7 @@ static void isg_send_sessions_list(struct isg_net *isg_net, pid_t pid, struct is
 
 static void isg_send_session_count(struct isg_net *isg_net, pid_t pid) {
 	struct isg_session *nis;
+	int i;
 
 	nis = kzalloc(sizeof(struct isg_session), GFP_ATOMIC);
 	if (!nis) {
@@ -819,10 +826,13 @@ static void isg_send_session_count(struct isg_net *isg_net, pid_t pid) {
 	}
 
 	spin_lock_init(&nis->lock);
-	nis->info.ipaddr = atomic_read(&isg_net->cnt.approved);
-	nis->info.nat_ipaddr = atomic_read(&isg_net->cnt.unapproved);
-	nis->info.port_number = atomic_read(&isg_net->cnt.dying);
-
+	for_each_possible_cpu(i) {
+		struct isg_net_stat *cnt;
+		cnt = per_cpu_ptr(isg_net->cnt, i);
+		nis->info.ipaddr += cnt->approved;
+		nis->info.nat_ipaddr += cnt->unapproved;
+		nis->info.port_number += cnt->dying;
+	}
 	isg_send_event(isg_net, EVENT_SESS_COUNT, nis, pid, NLMSG_DONE, 0, NULL);
 
 	kfree(nis);
@@ -871,6 +881,7 @@ static void isg_session_timeout(struct timer_list *arg) {
 	struct isg_session *is = from_timer(is, arg, timer);
 #endif
 	u64 ns_now, stat_duration, idle_sec;
+	struct isg_net_stat *cnt;
 	struct isg_session *isrv;
 	struct hlist_node *l;
 
@@ -888,7 +899,8 @@ static void isg_session_timeout(struct timer_list *arg) {
 				kfree(isrv);
 			}
 		}
-		atomic_dec(&is->isg_net->cnt.dying);
+		cnt = this_cpu_ptr(is->isg_net->cnt);
+		cnt->dying--;
 		kfree(is);
 		return;
 	}
@@ -1240,10 +1252,6 @@ static int isg_initialize(struct net *net) {
 		return -1;
 	}
 
-	atomic_set(&isg_net->cnt.approved, 0);
-	atomic_set(&isg_net->cnt.unapproved, 0);
-	atomic_set(&isg_net->cnt.dying, 0);
-
 	return 0;
 }
 
@@ -1279,12 +1287,13 @@ void isg_cleanup(struct isg_net *isg_net) {
 
 	vfree(isg_net->hash);
 	vfree(isg_net->port_bitmap);
+	free_percpu(isg_net->cnt);
 }
 
 static int __net_init isg_net_init(struct net *net) {
 	struct isg_net *isg_net;
 	struct ctl_table *table;
-	int err = -ENOMEM;
+	int err = -ENOMEM, i;
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,33)
 	isg_net = kzalloc(sizeof(struct isg_net), GFP_KERNEL);
 	if (isg_net == NULL) {
@@ -1312,6 +1321,16 @@ static int __net_init isg_net_init(struct net *net) {
 	table[1].data = &isg_net->tg_deny_action;
 	table[2].data = &isg_net->pass_outgoing;
 
+	isg_net->cnt = alloc_percpu_gfp(struct isg_net_stat, GFP_KERNEL);
+	if (!isg_net->cnt)
+		goto err_reg;
+	for_each_possible_cpu(i) {
+		struct isg_net_stat *cnt = per_cpu_ptr(isg_net->cnt, i);
+		cnt->approved = 0;
+		cnt->unapproved = 0;
+		cnt->dying = 0;
+	}
+
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0)
 	isg_net->sysctl_hdr = register_net_sysctl(net, "net/ipt_ISG", table);
 #else
@@ -1319,7 +1338,7 @@ static int __net_init isg_net_init(struct net *net) {
 #endif
 	if (isg_net->sysctl_hdr == NULL) {
 		err = -ENOMEM;
-		goto err_reg;
+		goto err_stats;
 	}
 
 	err = isg_initialize(net);
@@ -1331,6 +1350,8 @@ static int __net_init isg_net_init(struct net *net) {
 
 err_init:
 	unregister_net_sysctl_table(isg_net->sysctl_hdr);
+err_stats:
+	free_percpu(isg_net->cnt);
 err_reg:
 	kfree(table);
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,33)
