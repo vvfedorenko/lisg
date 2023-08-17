@@ -78,61 +78,61 @@ enum isg_service_flags {
 			(test_bit(ISG_IS_DYING, &is->info.flags))
 
 struct isg_session_rate {
-	u_int32_t rate;			/* Policing (rate/burst) info (kbit/s) */
-	u_int32_t burst;
+	u32 rate;			/* Policing (rate/burst) info (kbit/s) */
+	u32 burst;
 };
 
 struct isg_session_info_v0 {
-	u_int64_t id;
-	u_int8_t cookie[32];
+	u64 id;
+	u8 cookie[32];
 
-	u_int32_t ipaddr;			/* User's IP-address */
-	u_int32_t nat_ipaddr;		/* User's 1-to-1 NAT IP-address */
-	u_int8_t macaddr[ETH_ALEN];	/* User's MAC-address */
+	u32 ipaddr;			/* User's IP-address */
+	u32 nat_ipaddr;			/* User's 1-to-1 NAT IP-address */
+	u8 macaddr[ETH_ALEN];		/* User's MAC-address */
 
 	unsigned long flags;
 
-	u_int32_t port_number;		/* Virtual port number for session */
-	u_int32_t export_interval;	/* Session statistics export interval (in nanoseconds) */
-	u_int32_t idle_timeout;	/* Session idle timeout (in nanoseconds) */
-	u_int32_t max_duration;	/* Max session duration time (in nanoseconds) */
+	u32 port_number;		/* Virtual port number for session */
+	u32 export_interval;		/* Session statistics export interval (in nanoseconds) */
+	u32 idle_timeout;		/* Session idle timeout (in nanoseconds) */
+	u32 max_duration;		/* Max session duration time (in nanoseconds) */
 
-	struct isg_session_rate rate[2];			/* Policing (rate/burst) info (kbit/s) */
+	struct isg_session_rate rate[2];/* Policing (rate/burst) info (kbit/s) */
 };
 
 struct isg_session_info {
-	u_int64_t id;
-	u_int8_t cookie[32];
+	u64 id;
+	u8 cookie[32];
 
-	u_int32_t ipaddr;			/* User's IP-address */
-	u_int32_t nat_ipaddr;		/* User's 1-to-1 NAT IP-address */
-	u_int8_t macaddr[ETH_ALEN];	/* User's MAC-address */
+	u32 ipaddr;			/* User's IP-address */
+	u32 nat_ipaddr;			/* User's 1-to-1 NAT IP-address */
+	u8 macaddr[ETH_ALEN];		/* User's MAC-address */
 
-	unsigned long flags;
+	u32 flags;
 
-	u_int32_t port_number;		/* Virtual port number for session */
-	u64 export_interval;	/* Session statistics export interval (in nanoseconds) */
-	u64 idle_timeout;	/* Session idle timeout (in nanoseconds) */
-	u64 max_duration;	/* Max session duration time (in nanoseconds) */
+	u32 port_number;		/* Virtual port number for session */
+	u64 export_interval;		/* Session statistics export interval (in nanoseconds) */
+	u64 idle_timeout;		/* Session idle timeout (in nanoseconds) */
+	u64 max_duration;		/* Max session duration time (in nanoseconds) */
 
-	struct isg_session_rate rate[2];			/* Policing (rate/burst) info (kbit/s) */
+	struct isg_session_rate rate[2];/* Policing (rate/burst) info (kbit/s) */
 };
 
 struct isg_ev_session_stat {
-	u_int32_t duration;		/* Session duration (seconds) */
-	u_int32_t padding;		/* For in_packets field proper alignment on 64-bit systems */
+	u32 duration;		/* Session duration (seconds) */
+	u32 padding;		/* For in_packets field proper alignment on 64-bit systems */
 
-	u_int64_t in_packets;	/* Statistics for session traffic */
-	u_int64_t in_bytes;
-	u_int64_t out_packets;
-	u_int64_t out_bytes;
+	u64 in_packets;		/* Statistics for session traffic */
+	u64 in_bytes;
+	u64 out_packets;
+	u64 out_bytes;
 };
 
 struct isg_session_stat {
-	u_int64_t packets;	/* Statistics for session traffic */
-	u_int64_t bytes;
-	u_int64_t tokens;
-	u_int64_t last_seen;
+	u64 packets;		/* Statistics for session traffic */
+	u64 bytes;
+	u64 tokens;
+	u64 last_seen;
 };
 
 struct isg_session {
@@ -146,9 +146,9 @@ struct isg_session {
 
 	struct isg_session_info info;
 	unsigned int hash_key;
-	struct hlist_bl_node list;			/* Main list of sessions (isg_hash) */
-	struct isg_service_desc *sdesc;	/* Service description for this sub-session */
-	struct isg_session *parent_is;	/* Parent session (only for sub-sessions/services) */
+	struct hlist_bl_node list;		/* Main list of sessions (isg_hash) */
+	struct isg_service_desc *sdesc;		/* Service description for this sub-session */
+	struct isg_session *parent_is;		/* Parent session (only for sub-sessions/services) */
 
 	struct hlist_head srv_head;		/* This session sub-sessions (services) list */
 	struct hlist_node srv_node;
@@ -180,60 +180,60 @@ void isg_session_info_v1_fill(struct isg_session_info *out, struct isg_session_i
 }
 
 struct isg_in_event {
-	u_int32_t type;
+	u32 type;
 	union {
 		struct isg_session_info_in {
 			struct isg_session_info_v0 sinfo;
-			u_int8_t service_name[32];
-			u_int8_t flags_op;
-		} __attribute__ ((packed)) si;
+			u8 service_name[32];
+			u8 flags_op;
+		} si;
 
 		struct nehash_entry_in {
-			u_int32_t pfx;
-			u_int32_t mask;
-			u_int8_t tc_name[32];
-		} __attribute__ ((packed)) ne;
+			u32 pfx;
+			u32 mask;
+			u8 tc_name[32];
+		} ne;
 
 		struct service_desc_in {
-			u_int8_t tc_name[32];
-			u_int8_t service_name[32];
-			u_int8_t flags;
-		} __attribute__ ((packed)) sdesc;
+			u8 tc_name[32];
+			u8 service_name[32];
+			u8 flags;
+		} sdesc;
 	};
-} __attribute__ ((packed));
+};
 
 struct isg_out_event {
-	u_int32_t type;
+	u32 type;
 	struct isg_session_info_v0 sinfo;
 	struct isg_ev_session_stat sstat;
-	u_int64_t parent_session_id;	/* Parent session-ID (only for sub-sessions/services) */
-	u_int8_t service_name[32];		/* Service name (only for sub-sessions/services) */
-} __attribute__ ((packed));
+	u64 parent_session_id;		/* Parent session-ID (only for sub-sessions/services) */
+	u8 service_name[32];		/* Service name (only for sub-sessions/services) */
+};
 
 struct isg_out_event_v1 {
-	u_int32_t type;
+	u32 type;
 	struct isg_session_info sinfo;
 	struct isg_ev_session_stat sstat;
-	u_int64_t parent_session_id;	/* Parent session-ID (only for sub-sessions/services) */
-	u_int8_t service_name[32];		/* Service name (only for sub-sessions/services) */
-} __attribute__ ((packed));
+	u64 parent_session_id;		/* Parent session-ID (only for sub-sessions/services) */
+	u8 service_name[32];		/* Service name (only for sub-sessions/services) */
+};
 
 struct traffic_class {
 	struct hlist_node list;
-	u_int8_t name[32];
+	u8 name[32];
 };
 
 struct nehash_entry {
 	struct hlist_node list;
-	u_int32_t pfx;
-	u_int32_t mask;
+	u32 pfx;
+	u32 mask;
 	struct traffic_class *tc;
 };
 
 struct isg_service_desc {
 	struct hlist_node list;
-	u_int8_t name[32];
-	u_int8_t flags;
+	u8 name[32];
+	u8 flags;
 #define SERVICE_DESC_IS_DYNAMIC	(1 << 0)
 	struct traffic_class *tcs[MAX_SD_CLASSES];
 };
@@ -274,12 +274,12 @@ extern unsigned int nehash_key_len;
 extern spinlock_t isg_lock;
 
 extern int nehash_init(struct isg_net *);
-extern int nehash_add_to_queue(struct isg_net *, u_int32_t, u_int32_t, u_int8_t *);
+extern int nehash_add_to_queue(struct isg_net *, u32, u32, u8 *);
 extern int nehash_commit_queue(struct isg_net *);
-extern struct nehash_entry *nehash_lookup(struct isg_net *, u_int32_t);
+extern struct nehash_entry *nehash_lookup(struct isg_net *, u32);
 extern void nehash_sweep_queue(struct isg_net *);
 extern void nehash_sweep_entries(struct isg_net *);
 extern void nehash_free_everything(struct isg_net *);
-extern struct traffic_class *nehash_find_class(struct isg_net *, u_int8_t *);
+extern struct traffic_class *nehash_find_class(struct isg_net *, u8 *);
 
 #endif
