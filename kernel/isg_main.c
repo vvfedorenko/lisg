@@ -1008,9 +1008,8 @@ isg_mt(const struct sk_buff *skb,
 
 		read_lock_bh(&is->isg_net->nehash_rw_lock);
 		ne = nehash_lookup(is->isg_net, iph->daddr);
-		if (ne == NULL) {
+		if (ne == NULL)
 			goto out;
-		}
 
 		hlist_for_each_entry_safe(isrv, l, &is->srv_head, srv_node) { /* For each sub-session (service) */
 			int i;
@@ -1018,17 +1017,20 @@ isg_mt(const struct sk_buff *skb,
 			if (!test_bit(ISG_SERVICE_STATUS_ON, &isrv->info.flags) || !test_bit(ISG_SERVICE_TAGGER, &isrv->info.flags)) {
 				continue;
 			}
+			if (strncmp(isrv->sdesc->name, iinfo->service_name, MAX_SERVICE_NAME))
+				continue;
 
 			tc_list = isrv->sdesc->tcs;
 
 			for (i = 0; *tc_list && i < MAX_SD_CLASSES; i++, tc_list++) { /* For each service description's class */
 				struct traffic_class *tc = *tc_list;
 		
-				if (ne->tc == tc && !strcmp(isrv->sdesc->name, iinfo->service_name)) {
+				if (ne->tc == tc) {
 					err = 1;
 					goto out;
 				}
 			}
+			break;
 		}
 out:
 		read_unlock_bh(&is->isg_net->nehash_rw_lock);
@@ -1152,7 +1154,7 @@ isg_tg(struct sk_buff *skb,
 
 		read_unlock_bh(&iisg_net->nehash_rw_lock);
 		if (!classic_is) {
-			/* This packet not belongs to session's services (or appropriate service's status is not on) */
+			/* This packet doesn't belongs to session's services (or appropriate service's status is not on) */
 			/* assume action = action_drop; */
 			goto out;
 		}
