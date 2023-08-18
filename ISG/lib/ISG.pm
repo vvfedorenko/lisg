@@ -229,7 +229,7 @@ sub pack_event {
 
 	} else {
 
-		return pack("I a4 a8 a32 N2 a12 V I8 a32 Ci a7",
+		return pack("I a4 a8 a32 N2 a8 V a4 I8 a32 Ci a7",
 			$pars->{'type'},
 			0, # padding
 			$pars->{'session_id'},
@@ -238,6 +238,7 @@ sub pack_event {
 			$pars->{'nat_ipaddr'},
 			0, # MAC-Address is read-only plus pad
 			$pars->{'flags'},
+			0, # unused 32bit of flags
 			$pars->{'port_number'},
 			$pars->{'alive_interval'},
 			$pars->{'idle_timeout'},
@@ -255,7 +256,7 @@ sub pack_event {
 sub unpack_event {
 	my $pars;
 
-	my ($trash0, $trash1, $trash2);
+	my ($trash0, $trash1, $trash2, $trash3);
 	my ($in_packets_lo, $in_packets_hi, $out_packets_lo, $out_packets_hi);
 	my ($in_bytes_lo, $in_bytes_hi, $out_bytes_lo, $out_bytes_hi);
 	my ($session_id_hi, $session_id_lo);
@@ -272,6 +273,7 @@ sub unpack_event {
 		$pars->{'macaddr'},
 		$trash1, # pad in isg_session_info_v0
 		$pars->{'flags'},
+		$trash2, # unused 32bit of flags
 		$pars->{'port_number'},
 		$pars->{'alive_interval'},
 		$pars->{'idle_timeout'},
@@ -281,7 +283,7 @@ sub unpack_event {
 		$pars->{'out_rate'},
 		$pars->{'out_burst'},
 		$pars->{'duration'},
-		$trash2, # Padding
+		$trash3, # Padding
 		$in_packets_hi,
 		$in_packets_lo,
 		$in_bytes_hi,
@@ -293,7 +295,7 @@ sub unpack_event {
 		$p_session_id_hi,
 		$p_session_id_lo,
 		$pars->{'service_name'}
-	) = unpack("I a4 I2 a32 N2 H12 a6 V I8 I i I10 a32", shift);
+	) = unpack("I a4 I2 a32 N2 H12 a2 V a4 I8 I i I10 a32", shift);
 
 	$pars->{'service_name'} =~ s/\000//g;
 	if (!length($pars->{'service_name'})) {
