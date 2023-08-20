@@ -600,6 +600,7 @@ static inline int isg_start_session(struct isg_session *is) {
 
 
 static int isg_update_session(struct isg_net *isg_net, struct isg_in_event *ev) {
+	struct isg_session_rate *old_rate = NULL, *rate;
 	struct isg_net_stat *cnt;
 	struct isg_session *is;
 
@@ -616,14 +617,21 @@ static int isg_update_session(struct isg_net *isg_net, struct isg_in_event *ev) 
 
 	isg_log("ipt_ISG: update session Virtual%d", is->info.port_number);
 
+	rate = kmalloc(sizeof(struct isg_session_rate) * 2, GFP_KERNEL);
+	if (rate) {
+		rate[ISG_DIR_IN] = ev->si.sinfo.rate[ISG_DIR_IN];
+		rate[ISG_DIR_OUT] = ev->si.sinfo.rate[ISG_DIR_OUT];
+		old_rate = is->rate;
+		rcu_assign_pointer(is->rate, rate);
+	} else
+		printk(KERN_ERR "ipt_ISG: No memore to allocate rate info for Virtual%d\n", is->info.port_number);
+
 	spin_lock_bh(&is->lock);
 	if (!is->info.flags) {
 		is->info.max_duration = 0;
 	}
 
 
-	is->info.rate[ISG_DIR_IN] = ev->si.sinfo.rate[ISG_DIR_IN];
-	is->info.rate[ISG_DIR_OUT] = ev->si.sinfo.rate[ISG_DIR_OUT];
 	if (ev->si.sinfo.nat_ipaddr) {
 		is->info.nat_ipaddr = ev->si.sinfo.nat_ipaddr;
 	}
@@ -641,7 +649,7 @@ static int isg_update_session(struct isg_net *isg_net, struct isg_in_event *ev) 
 	}
 
 	if (ev->si.sinfo.flags) {
-		u_int16_t flags = ev->si.sinfo.flags & FLAGS_RW_MASK;
+		unsigned long flags = ev->si.sinfo.flags & FLAGS_RW_MASK;
 
 		if (!ev->si.flags_op) {
 			is->info.flags = flags;
@@ -665,6 +673,8 @@ static int isg_update_session(struct isg_net *isg_net, struct isg_in_event *ev) 
 	}
 	spin_unlock_bh(&is->lock);
 
+	if (old_rate)
+		kfree_rcu(old_rate);
 	if (ev->type == EVENT_SESS_APPROVE) {
 		isg_send_event(is->isg_net, EVENT_SESS_START, is, 0, NLMSG_DONE, 0, NULL);
 	}
@@ -855,7 +865,7 @@ static void isg_send_services_list(struct isg_net *isg_net, pid_t pid, struct is
 
 }
 
-/* MUST be called under session spinlock locked */
+/* MUST be called under session stat spinlock locked */
 static inline void __isg_update_tokens(struct isg_session_stat *iss, u64 now,
 			u32 rate, u32 burst)
 {
@@ -901,6 +911,7 @@ static void isg_session_timeout(struct timer_list *arg) {
 		}
 		cnt = this_cpu_ptr(is->isg_net->cnt);
 		cnt->dying--;
+		kfree_rcu(is->rate);
 		kfree(is);
 		return;
 	}
@@ -1048,7 +1059,8 @@ isg_tg(struct sk_buff *skb,
 #endif
 {
 	const struct ipt_ISG_info *iinfo = par->targinfo;
-	struct isg_session_stat *stat, *parent_stat;
+	struct isg_session_stat *stat;
+	struct isg_session_rate *srate;
 
 	struct iphdr *iph;
 	struct isg_session *is, *isrv, *classic_is = NULL;
@@ -1088,7 +1100,6 @@ isg_tg(struct sk_buff *skb,
 	}
 
 	shash = get_isg_hash(laddr);
-	local_bh_disable();
 	hlist_bl_lock(&isg_net->hash[shash]);
 
 	is = isg_lookup_session_hash(isg_net, laddr, shash);
@@ -1166,10 +1177,11 @@ isg_tg(struct sk_buff *skb,
 
 	stat = &is->stat[dir];
 
-	spin_lock_bh(&is->lock);
-	rate = is->info.rate[dir].rate;
-	burst = is->info.rate[dir].burst;
-	spin_unlock_bh(&is->lock);
+	rcu_read_lock();
+	srate = rcu_dereference(is->rate);
+	rate = srate[dir].rate;
+	burst = srate[dir].burst;
+	rcu_read_unlock();
 
 	spin_lock_bh(&stat->lock);
 	__isg_update_tokens(stat, now, rate, burst);
@@ -1188,13 +1200,12 @@ isg_tg(struct sk_buff *skb,
 	if (classic_is && action == action_accept) {
 		stat = &classic_is->stat[dir];
 		spin_lock_bh(&stat->lock);
-		parent_stat->bytes += pkt_len;
-		parent_stat->packets++;
+		stat->bytes += pkt_len;
+		stat->packets++;
 		spin_unlock_bh(&stat->lock);
 	}
 
 out:
-	local_bh_enable();
 	return action;
 
 unlock_hash:
@@ -1260,6 +1271,7 @@ static int isg_initialize(struct net *net) {
 void isg_cleanup(struct isg_net *isg_net) {
 	unsigned int i;
 	struct isg_session *is;
+	struct isg_session_rate *rate;
 	struct isg_service_desc *sdesc;
 	struct hlist_bl_node *l, *c;
 	struct hlist_node *n;
@@ -1274,7 +1286,11 @@ void isg_cleanup(struct isg_net *isg_net) {
 		hlist_bl_for_each_entry_safe(is, l, c, &isg_net->hash[i], list) {
 			isg_free_session(is);
 			del_timer(&is->timer);
+			rate = is->rate;
+			rcu_assign_pointer(is->rate, NULL);
 			kfree(is);
+			if (rate)
+				kfree_rcu(rate);
 		}
 	}
 

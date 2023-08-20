@@ -150,6 +150,7 @@ struct isg_session {
 	struct isg_session_info info;
 	spinlock_t lock;
 
+	struct isg_session_rate __rcu *rate;
 	struct isg_net *isg_net;
 	struct hlist_bl_node list;		/* Main list of sessions (isg_hash) */
 	struct isg_service_desc *sdesc;		/* Service description for this sub-session */
