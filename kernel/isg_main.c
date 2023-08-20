@@ -506,11 +506,21 @@ static int isg_apply_service(struct isg_net *isg_net, struct isg_in_event *ev) {
 	return 0;
 
 }
+
 /* MUST be called under hlist lock */
-static struct isg_session *__isg_create_session(struct isg_net *isg_net, u_int32_t ipaddr, u_int8_t *src_mac) {
-	unsigned int port_number, shash;
-	struct isg_net_stat *cnt;
+static void __isg_insert_session(struct isg_net *isg_net, struct isg_session *is, unsigned int hash)
+{
 	struct hlist_bl_head *h;
+
+	h = &isg_net->hash[hash];
+	is->hash_key = hash;
+	is->isg_net = isg_net;
+	hlist_bl_add_head(&is->list, h);
+}
+/* MUST be called under hlist lock */
+static struct isg_session *__isg_create_session(struct isg_net *isg_net, u32 ipaddr, unsigned int shash)
+{
+	struct isg_session_rate *rate;
 	struct isg_session *is;
 
 	is = kzalloc(sizeof(struct isg_session), GFP_ATOMIC);
@@ -518,18 +528,36 @@ static struct isg_session *__isg_create_session(struct isg_net *isg_net, u_int32
 		printk(KERN_ERR "ipt_ISG: session allocation failed\n");
 		return NULL;
 	}
-	shash = get_isg_hash(ipaddr);
-	h = &isg_net->hash[shash];
+	rate = kzalloc(sizeof(struct isg_session_rate) * 2, GFP_ATOMIC);
+	if (!rate) {
+		printk(KERN_ERR "ipt_ISG: session allocation failed\n");
+		kfree(is);
+		return NULL;
+	}
 	spin_lock_init(&is->lock);
 	spin_lock_init(&is->stat[0].lock);
 	spin_lock_init(&is->stat[1].lock);
 	INIT_HLIST_HEAD(&is->srv_head);
-	is->hash_key = shash;
 	is->info.ipaddr = ipaddr;
-	is->start_ktime = ktime_get_mono_fast_ns();
-	is->isg_net = isg_net;
+	WRITE_ONCE(is->rate, rate);
+	__isg_insert_session(isg_net, is, shash);
 
+	return is;
+}
+
+/* Used for session fullfilment but with hlist unlocked */
+static void isg_create_session_notify(struct isg_net *isg_net, struct isg_session *is, u8 *src_mac) {
+	struct isg_net_stat *cnt;
+	unsigned int port_number;
+
+	is->start_ktime = ktime_get_mono_fast_ns();
 	is->info.max_duration = INITIAL_MAX_DURATION;
+
+	if (src_mac) {
+		memcpy(is->info.macaddr, src_mac, ETH_ALEN);
+	}
+
+	get_random_bytes(&(is->info.id), sizeof(is->info.id));
 
 	port_number = find_first_zero_bit(isg_net->port_bitmap, PORT_BITMAP_SIZE);
 	while(test_and_set_bit(port_number, isg_net->port_bitmap)) {
@@ -537,11 +565,6 @@ static struct isg_session *__isg_create_session(struct isg_net *isg_net, u_int32
 	}
 	is->info.port_number = port_number;
 
-	if (src_mac) {
-		memcpy(is->info.macaddr, src_mac, ETH_ALEN);
-	}
-
-	get_random_bytes(&(is->info.id), sizeof(is->info.id));
 
 	isg_log("ipt_ISG: create session Virtual%d", is->info.port_number);
 
@@ -552,14 +575,11 @@ static struct isg_session *__isg_create_session(struct isg_net *isg_net, u_int32
 #endif
 	mod_timer(&is->timer, jiffies + session_check_interval * HZ);
 
-	hlist_bl_add_head(&is->list, h);
 
 	isg_send_event(isg_net, EVENT_SESS_CREATE, is, 0, NLMSG_DONE, 0, NULL);
 
 	cnt = this_cpu_ptr(isg_net->cnt);
 	cnt->unapproved++;
-
-	return is;
 }
 
 static int __isg_start_session(struct isg_session *is) {
@@ -1107,19 +1127,23 @@ isg_tg(struct sk_buff *skb,
 	if (is == NULL) {
 		/* assume action = action_drop; */
 		if (iinfo->flags & INIT_SESSION) {
-			u_int8_t *src_mac = NULL;
-
-			if (skb_mac_header(skb) >= skb->head && skb_mac_header(skb) + ETH_HLEN <= skb->data) {
-				if (iinfo->flags & INIT_BY_SRC) {
-					src_mac = eth_hdr(skb)->h_source;
-				}
-			}
-
-			__isg_create_session(isg_net, laddr, src_mac);
+			is = __isg_create_session(isg_net, laddr, shash);
 		} else if (isg_net->pass_outgoing) {
 			action = action_accept;
 		}
-		goto unlock_hash;
+		hlist_bl_unlock(&isg_net->hash[shash]);
+
+		if (is) {
+			u8 *src_mac = NULL;
+
+			if (skb_mac_header_was_set(skb) && iinfo->flags & INIT_BY_SRC) {
+				src_mac = eth_hdr(skb)->h_source;
+			}
+
+			isg_create_session_notify(isg_net, is, src_mac);
+		}
+
+		goto out;
 	}
 	hlist_bl_unlock(&isg_net->hash[shash]);
 
@@ -1207,11 +1231,6 @@ isg_tg(struct sk_buff *skb,
 
 out:
 	return action;
-
-unlock_hash:
-	hlist_bl_unlock(&isg_net->hash[shash]);
-	goto out;
-
 }
 
 static int isg_initialize(struct net *net) {
