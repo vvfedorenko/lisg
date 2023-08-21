@@ -1083,7 +1083,7 @@ isg_tg(struct sk_buff *skb,
 	struct isg_session_rate *srate;
 
 	struct iphdr *iph;
-	struct isg_session *is, *isrv, *classic_is = NULL;
+	struct isg_session *is, *isrv, *parent_is = NULL;
 	struct nehash_entry *ne;
 	struct traffic_class **tc_list;
 	__be32 laddr, raddr;
@@ -1177,18 +1177,18 @@ isg_tg(struct sk_buff *skb,
 			for (i = 0; *tc_list && i < MAX_SD_CLASSES; i++, tc_list++) { /* For each service description's class */
 				struct traffic_class *tc = *tc_list;
 				if (ne->tc == tc) {
-					classic_is = is;
+					parent_is = is;
 					is = isrv;
 					break;
 				}
 			}
-			if (classic_is) {
+			if (parent_is) {
 				break;
 			}
 		}
 
 		read_unlock_bh(&iisg_net->nehash_rw_lock);
-		if (!classic_is) {
+		if (!parent_is) {
 			/* This packet doesn't belongs to session's services (or appropriate service's status is not on) */
 			/* assume action = action_drop; */
 			goto out;
@@ -1221,8 +1221,8 @@ isg_tg(struct sk_buff *skb,
 	/* default action drop */
 	spin_unlock_bh(&stat->lock);
 
-	if (classic_is && action == action_accept) {
-		stat = &classic_is->stat[dir];
+	if (parent_is && action == action_accept) {
+		stat = &parent_is->stat[dir];
 		spin_lock_bh(&stat->lock);
 		stat->bytes += pkt_len;
 		stat->packets++;
