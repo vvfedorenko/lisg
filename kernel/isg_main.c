@@ -293,6 +293,10 @@ static struct sk_buff *isg_send_event(struct isg_net *isg_net, u_int16_t type,
 
 	if (is) {
 		isg_session_info_v0_fill(&ev->sinfo, &is->info);
+		rcu_read_lock();
+		isg_session_rate_info(&ev->sinfo, rcu_dereference(is->rate));
+		rcu_read_unlock();
+
 		ev->sstat = isg_init_ev_stat(is);
 
 		if (is->start_ktime) {

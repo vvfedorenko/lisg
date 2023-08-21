@@ -173,7 +173,14 @@ void isg_session_info_v0_fill(struct isg_session_info_v0 *out, struct isg_sessio
 	out->export_interval = (u32)div_u64(in->export_interval, NSEC_PER_SEC);
 	out->idle_timeout = (u32)div_u64(in->idle_timeout, NSEC_PER_SEC);
 	out->max_duration = (u32)div_u64(in->max_duration, NSEC_PER_SEC);
+	// no need to fill rate info after rcu conversion, but leave it as is
 	memcpy(out->rate, in->rate, 2 * sizeof(struct isg_session_rate));
+}
+
+static inline
+void isg_session_rate_info(struct isg_session_info_v0 *out, struct isg_session_rate *rate)
+{
+	memcpy(out->rate, rate, 2 * sizeof(struct isg_session_rate));
 }
 
 static inline
