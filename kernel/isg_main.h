@@ -62,7 +62,8 @@ enum isg_service_flags {
 	ISG_SERVICE_TAGGER,
 };
 
-#define FLAGS_RW_MASK 0x54 /* (01010100) */
+#define FLAGS_RW_MASK  0x54 /* (01010100) */
+#define FLAGS_ALL_MASK 0xFFFFFFFF /* only 32 bits are used */
 
 #define IS_SERVICE(is)				\
 			(test_bit(ISG_IS_SERVICE, &is->info.flags))
@@ -184,14 +185,25 @@ void isg_session_rate_info(struct isg_session_info_v0 *out, struct isg_session_r
 }
 
 static inline
+void isg_session_info_v1_fill_timeouts(struct isg_session_info *out,
+				       struct isg_session_info_v0 *in)
+{
+	out->export_interval = in->export_interval ? (u64)(in->export_interval * NSEC_PER_SEC)
+						   : out->export_interval;
+	out->idle_timeout = in->idle_timeout ? (u64)(in->idle_timeout * NSEC_PER_SEC)
+					     : out->idle_timeout;
+	out->max_duration = in->max_duration ? (u64)(in->max_duration * NSEC_PER_SEC)
+					     : out->max_duration;
+
+}
+
+static inline
 void isg_session_info_v1_fill(struct isg_session_info *out, struct isg_session_info_v0 *in)
 {
 	memcpy(out, in, offsetof(struct isg_session_info, pad0));
 	out->flags = in->flags;
 	out->port_number = in->port_number;
-	out->export_interval = (u64)(in->export_interval * NSEC_PER_SEC);
-	out->idle_timeout = (u64)(in->idle_timeout * NSEC_PER_SEC);
-	out->max_duration = (u64)(in->max_duration * NSEC_PER_SEC);
+	isg_session_info_v1_fill_timeouts(out, in);
 	memcpy(out->rate, in->rate, 2 * sizeof(struct isg_session_rate));
 }
 

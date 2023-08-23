@@ -655,24 +655,13 @@ static int isg_update_session(struct isg_net *isg_net, struct isg_in_event *ev) 
 		is->info.max_duration = 0;
 	}
 
+	isg_session_info_v1_fill_timeouts(&is->info, &ev->si.sinfo);
 
 	if (ev->si.sinfo.nat_ipaddr) {
 		is->info.nat_ipaddr = ev->si.sinfo.nat_ipaddr;
 	}
 
-	if (ev->si.sinfo.export_interval) {
-		is->info.export_interval = (u64)(ev->si.sinfo.export_interval * NSEC_PER_SEC);
-	}
-
-	if (ev->si.sinfo.idle_timeout) {
-		is->info.idle_timeout = (u64)(ev->si.sinfo.idle_timeout * NSEC_PER_SEC);
-	}
-
-	if (ev->si.sinfo.max_duration) {
-		is->info.max_duration = (u64)(ev->si.sinfo.max_duration * NSEC_PER_SEC);
-	}
-
-	if (ev->si.sinfo.flags) {
+	if (ev->si.sinfo.flags & FLAGS_ALL_MASK) {
 		unsigned long flags = ev->si.sinfo.flags & FLAGS_RW_MASK;
 
 		if (!ev->si.flags_op) {
@@ -893,10 +882,11 @@ static void isg_send_services_list(struct isg_net *isg_net, pid_t pid, struct is
 static inline void __isg_update_tokens(struct isg_session_stat *iss, u64 now,
 			u32 rate, u32 burst)
 {
-	u64 tokens, ns_after;
+	u64 tokens, us_after;
 
-	ns_after = now > iss->last_seen ? now - iss->last_seen : 0;
-	tokens = div_u64(rate * ns_after, (u64)NSEC_PER_SEC);
+	/* we will use microseconds precision to avoid overflows */
+	us_after = time_after64(now, iss->last_seen) ? div_u64(now - iss->last_seen, NSEC_PER_USEC) : 0;
+	tokens = mul_u64_u32_div(us_after, rate, USEC_PER_SEC);
 
 	if ((iss->tokens + tokens) > burst) {
 		iss->tokens = burst;
@@ -904,7 +894,7 @@ static inline void __isg_update_tokens(struct isg_session_stat *iss, u64 now,
 		iss->tokens += tokens;
 	}
 
-	iss->last_seen += ns_after;
+	iss->last_seen += us_after * NSEC_PER_USEC;
 }
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4,14,0)
@@ -914,7 +904,7 @@ static void isg_session_timeout(unsigned long arg) {
 static void isg_session_timeout(struct timer_list *arg) {
 	struct isg_session *is = from_timer(is, arg, timer);
 #endif
-	u64 ns_now, stat_duration, idle_sec;
+	u64 ns_now, stat_duration, idle_nsec, last_seen;
 	struct isg_net_stat *cnt;
 	struct isg_session *isrv;
 	struct hlist_node *l;
@@ -922,8 +912,6 @@ static void isg_session_timeout(struct timer_list *arg) {
 	if (module_exiting) {
 		return;
 	}
-
-	ns_now = ktime_get_mono_fast_ns();
 
 	if (IS_SESSION_DYING(is)) {
 		isg_log("ipt_ISG: Virtual%d ISG_IS_DYING, freeing", is->info.port_number);
@@ -940,14 +928,17 @@ static void isg_session_timeout(struct timer_list *arg) {
 		return;
 	}
 
-	stat_duration = div_u64((ns_now - is->start_ktime), NSEC_PER_SEC);
-	idle_sec = div_u64(is->stat[ISG_DIR_IN].last_seen, NSEC_PER_SEC);
+	ns_now = ktime_get_mono_fast_ns();
+
+	stat_duration = ns_now - is->start_ktime;
+	last_seen = max(is->stat[ISG_DIR_IN].last_seen, is->stat[ISG_DIR_OUT].last_seen);
+	idle_nsec = ns_now - last_seen;
 
 	if (IS_SERVICE_ONLINE(is)) { /* Service timeout */
 
 		/* Check maximum session duration and idle timeout */
 		if ((is->info.max_duration && stat_duration >= is->info.max_duration) ||
-		    (is->info.idle_timeout && idle_sec >= is->info.idle_timeout)) {
+		    (is->info.idle_timeout && idle_nsec >= is->info.idle_timeout)) {
 			clear_bit(ISG_SERVICE_ONLINE, &is->info.flags);
 			spin_lock_bh(&is->lock);
 			get_random_bytes(&(is->info.id), sizeof(is->info.id));
@@ -968,26 +959,27 @@ static void isg_session_timeout(struct timer_list *arg) {
 
 			spin_lock_bh(&is->lock);
 
-			if (!hlist_empty(&is->srv_head)) {
+			if (unlikely(!hlist_empty(&is->srv_head))) {
 				hlist_for_each_entry_safe(isrv, l, &is->srv_head, srv_node) {
 					is->stat[ISG_DIR_IN].last_seen = max(is->stat[ISG_DIR_IN].last_seen,
 									isrv->stat[ISG_DIR_IN].last_seen);
 					is->stat[ISG_DIR_OUT].last_seen = max(is->stat[ISG_DIR_OUT].last_seen,
 									isrv->stat[ISG_DIR_OUT].last_seen);
 				}
-				/* Service might have been seen later. TODO: update seesion to last service */
-				idle_sec = div_u64(is->stat[ISG_DIR_IN].last_seen, NSEC_PER_SEC);
+				/* Service might have been seen later */
+				last_seen = max(is->stat[ISG_DIR_IN].last_seen, is->stat[ISG_DIR_OUT].last_seen);
+				idle_nsec = ns_now - last_seen;
 			}
 
 			spin_unlock_bh(&is->lock);
 
 			/* Check maximum session duration and idle timeout */
 			if ((is->info.max_duration && stat_duration >= is->info.max_duration) ||
-				(is->info.idle_timeout && idle_sec >= is->info.idle_timeout)) {
+				(is->info.idle_timeout && idle_nsec >= is->info.idle_timeout)) {
 				isg_free_session(is);
 				goto out;
 			/* Check last export time */
-			} else if (is->info.export_interval && ns_now - is->last_export >= (is->info.export_interval * NSEC_PER_SEC)) {
+			} else if (is->info.export_interval && ns_now - is->last_export >= is->info.export_interval) {
 				is->last_export = ns_now;
 				isg_send_event(is->isg_net, EVENT_SESS_UPDATE, is, 0, NLMSG_DONE, 0, NULL);
 			}
