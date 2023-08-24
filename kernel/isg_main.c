@@ -627,6 +627,7 @@ static int isg_update_session(struct isg_net *isg_net, struct isg_in_event *ev) 
 	struct isg_session_rate *old_rate = NULL, *rate;
 	struct isg_net_stat *cnt;
 	struct isg_session *is;
+	int noaccounting = 0;
 
 	is = isg_find_session(isg_net, ev);
 
@@ -651,6 +652,7 @@ static int isg_update_session(struct isg_net *isg_net, struct isg_in_event *ev) 
 		printk(KERN_ERR "ipt_ISG: No memore to allocate rate info for Virtual%d\n", is->info.port_number);
 
 	spin_lock_bh(&is->lock);
+
 	if (!is->info.flags) {
 		is->info.max_duration = 0;
 	}
@@ -663,7 +665,7 @@ static int isg_update_session(struct isg_net *isg_net, struct isg_in_event *ev) 
 
 	if (ev->si.sinfo.flags & FLAGS_ALL_MASK) {
 		unsigned long flags = ev->si.sinfo.flags & FLAGS_RW_MASK;
-
+		noaccounting = !!IS_SESSION_NOT_ACCOUNTED(is);
 		if (!ev->si.flags_op) {
 			is->info.flags = flags;
 		} else if (ev->si.flags_op == FLAG_OP_SET) {
@@ -671,19 +673,21 @@ static int isg_update_session(struct isg_net *isg_net, struct isg_in_event *ev) 
 		} else if (ev->si.flags_op == FLAG_OP_UNSET) {
 			is->info.flags &= ~flags;
 		}
+		noaccounting -= !!IS_SESSION_NOT_ACCOUNTED(is);
 	}
 
+	cnt = this_cpu_ptr(isg_net->cnt);
 	if (ev->type == EVENT_SERV_APPLY) {
 		set_bit(ISG_IS_SERVICE, &is->info.flags);
 	} else if (ev->type == EVENT_SESS_APPROVE) {
 		memcpy(is->info.cookie, ev->si.sinfo.cookie, 32);
 		if (!test_and_set_bit(ISG_IS_APPROVED, &is->info.flags)) {
-			cnt = this_cpu_ptr(isg_net->cnt);
 			cnt->approved++;
 			cnt->unapproved--;
 		}
 		__isg_start_session(is);
 	}
+	cnt->noaccounting -= noaccounting;
 	spin_unlock_bh(&is->lock);
 
 	if (old_rate)
@@ -855,6 +859,7 @@ static void isg_send_session_count(struct isg_net *isg_net, pid_t pid) {
 		nis->info.ipaddr += cnt->approved;
 		nis->info.nat_ipaddr += cnt->unapproved;
 		nis->info.port_number += cnt->dying;
+		nis->info.export_interval += cnt->noaccounting;
 	}
 	isg_send_event(isg_net, EVENT_SESS_COUNT, nis, pid, NLMSG_DONE, 0, NULL);
 
@@ -923,6 +928,7 @@ static void isg_session_timeout(struct timer_list *arg) {
 		}
 		cnt = this_cpu_ptr(is->isg_net->cnt);
 		cnt->dying--;
+		cnt->noaccounting -= !!IS_SESSION_NOT_ACCOUNTED(is);
 		kfree_rcu(is->rate);
 		kfree(is);
 		return;
@@ -1362,6 +1368,7 @@ static int __net_init isg_net_init(struct net *net) {
 		cnt->approved = 0;
 		cnt->unapproved = 0;
 		cnt->dying = 0;
+		cnt->noaccounting = 0;
 	}
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0)

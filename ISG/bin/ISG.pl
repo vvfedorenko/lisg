@@ -78,10 +78,14 @@ if ((@ARGV == 2 && $ARGV[0] eq "clear") || (@ARGV == 4 && $ARGV[0] eq "change_ra
 
 	my $act   = ISG::ntohl($rev{'ipaddr'});
 	my $unap  = ISG::ntohl($rev{'nat_ipaddr'});
-	my $dying = ISG::ntohl($rev{'port_number'});
+	my $dying = $rev{'port_number'};
+	my $noacc = $rev{'alive_interval'};
+	my $all   = $act + $unap + $dying;
 	print "Approved sessions count:\t" . $act . "\n";
 	print "Unapproved sessions count:\t" . $unap ."\n";
 	print "Dying sessions count:\t" . $dying ."\n";
+	print "Sessions without accounting count:\t" . $noacc ."\n";
+	print "Total count:\t" . $all . "\n";
 
 } elsif (!defined($ARGV[0]) || (@ARGV == 2 && ($ARGV[0] eq "show_services" || $ARGV[0] eq "show_session"))) {
 	my $slist;

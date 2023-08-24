@@ -77,6 +77,8 @@ enum isg_service_flags {
 
 #define IS_SESSION_DYING(is) \
 			(test_bit(ISG_IS_DYING, &is->info.flags))
+#define IS_SESSION_NOT_ACCOUNTED(is) \
+			(test_bit(ISG_NO_ACCT, &is->info.flags))
 
 struct isg_session_rate {
 	u32 rate;			/* Policing (rate/burst) info (kbit/s) */
@@ -277,6 +279,7 @@ struct isg_net_stat {
 	int approved;
 	int unapproved;
 	int dying;
+	int noaccounting;
 };
 
 struct isg_net {
