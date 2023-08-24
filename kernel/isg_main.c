@@ -826,6 +826,11 @@ static void isg_send_sessions_list(struct isg_net *isg_net, pid_t pid, struct is
 	struct hlist_bl_node *l, *n;
 	struct sk_buff *skb = NULL;
 
+	if (ev->si.sinfo.ipaddr) {
+		is = isg_lookup_session(isg_net, ev->si.sinfo.ipaddr);
+		isg_send_event(isg_net, EVENT_SESS_INFO, is, pid, NLMSG_DONE, 0, NULL);
+		return;
+	}
 	if (ev->si.sinfo.port_number || ev->si.sinfo.id) {
 		is = isg_find_session(isg_net, ev);
 		isg_send_event(isg_net, EVENT_SESS_INFO, is, pid, NLMSG_DONE, 0, NULL);
