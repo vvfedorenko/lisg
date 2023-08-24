@@ -181,7 +181,9 @@ void isg_session_info_v0_fill(struct isg_session_info_v0 *out, struct isg_sessio
 static inline
 void isg_session_rate_info(struct isg_session_info_v0 *out, struct isg_session_rate *rate)
 {
-	memcpy(out->rate, rate, 2 * sizeof(struct isg_session_rate));
+	/* Counters request should not create any rate structures */
+	if (rate)
+		memcpy(out->rate, rate, 2 * sizeof(struct isg_session_rate));
 }
 
 static inline
