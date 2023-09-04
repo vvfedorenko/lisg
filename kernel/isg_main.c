@@ -752,12 +752,12 @@ static int isg_clear_session(struct isg_net *isg_net, struct isg_in_event *ev) {
 	return 1;
 }
 
-/* should be called under bit locked list */
+/* must be called under bit locked list */
 static inline struct isg_session *isg_lookup_session_hash(struct isg_net *isg_net,
                 u_int32_t ipaddr, unsigned int h) {
 	struct isg_session *is;
-	struct hlist_bl_node *l, *c;
-	hlist_bl_for_each_entry_safe(is, l, c, &isg_net->hash[h], list) {
+	struct hlist_bl_node *l;
+	hlist_bl_for_each_entry(is, l, &isg_net->hash[h], list) {
 		if (is->info.ipaddr == ipaddr) {
 			return is;
 		}
@@ -766,6 +766,7 @@ static inline struct isg_session *isg_lookup_session_hash(struct isg_net *isg_ne
 	return NULL;
 }
 
+/* can be called without lock, uses safe iterator */
 static inline struct isg_session *isg_lookup_session(struct isg_net *isg_net, u_int32_t ipaddr) {
 	struct isg_session *is;
 	struct hlist_bl_node *l, *c;
@@ -1021,15 +1022,12 @@ isg_mt(const struct sk_buff *skb,
 	struct isg_session *is, *isrv;
 	struct isg_net *isg_net;
 	struct hlist_node *l;
-	unsigned int shash;
 
 	iph = ip_hdr(skb);
 
 	isg_net = isg_pernet(dev_net((xt_in(par) != NULL) ? xt_in(par) : xt_out(par)));
 
-	shash = get_isg_hash(iph->saddr);
-
-	is = isg_lookup_session_hash(isg_net, iph->saddr, shash);
+	is = isg_lookup_session(isg_net, iph->saddr);
 	if (!is)
 		return 0;
 
@@ -1104,6 +1102,7 @@ isg_tg(struct sk_buff *skb,
 	const unsigned int action_drop =
 		isg_net->tg_deny_action ? XT_CONTINUE : NF_DROP;
 	unsigned int action = action_drop;
+	bool notify = false;
 
 	u32 pkt_len, pkt_len_bits, rate, burst;
 	u64 now;
@@ -1126,21 +1125,26 @@ isg_tg(struct sk_buff *skb,
 		dir = ISG_DIR_OUT;
 	}
 
-	shash = get_isg_hash(laddr);
-	hlist_bl_lock(&isg_net->hash[shash]);
-
-	is = isg_lookup_session_hash(isg_net, laddr, shash);
+	is = isg_lookup_session(isg_net, laddr);
 
 	if (is == NULL) {
 		/* assume action = action_drop; */
 		if (iinfo->flags & INIT_SESSION) {
-			is = __isg_create_session(isg_net, laddr, shash);
+			shash = get_isg_hash(laddr);
+			hlist_bl_lock(&isg_net->hash[shash]);
+			
+			is = isg_lookup_session_hash(isg_net, laddr, shash);
+			if (!is) {
+				is = __isg_create_session(isg_net, laddr, shash);
+				notify = true;
+			}
+			hlist_bl_unlock(&isg_net->hash[shash]);
 		} else if (isg_net->pass_outgoing) {
 			action = action_accept;
+			goto out;
 		}
-		hlist_bl_unlock(&isg_net->hash[shash]);
 
-		if (is) {
+		if (is && notify) {
 			u8 *src_mac = NULL;
 
 			if (skb_mac_header_was_set(skb) && iinfo->flags & INIT_BY_SRC) {
@@ -1149,10 +1153,10 @@ isg_tg(struct sk_buff *skb,
 
 			isg_create_session_notify(isg_net, is, src_mac);
 		}
+		if (notify)
+			goto out;
 
-		goto out;
 	}
-	hlist_bl_unlock(&isg_net->hash[shash]);
 
 	if (!is->info.flags) {
 		/* assume action = action_drop; */
