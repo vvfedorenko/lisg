@@ -12,6 +12,9 @@
 #include <net/net_namespace.h>
 #include <net/netns/generic.h>
 #include <linux/list_bl.h>
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 4, 0)
+#include <linux/bitmap.h>
+#endif
 
 #include "isg.h"
 #include "kcompat.h"

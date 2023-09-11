@@ -1247,7 +1247,7 @@ out:
 static int isg_initialize(struct net *net) {
 	unsigned int i;
 	int hsize = sizeof(struct hlist_head) * nr_buckets;
-
+	int ret = -ENOMEM;
 	struct isg_net *isg_net = isg_pernet(net);
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0)
@@ -1263,7 +1263,7 @@ static int isg_initialize(struct net *net) {
 
 	isg_net->hash = vmalloc(hsize);
 	if (isg_net->hash == NULL) {
-		return -ENOMEM;
+		goto err;
 	}
 
 	for (i = 0; i < nr_buckets; i++) {
@@ -1273,16 +1273,14 @@ static int isg_initialize(struct net *net) {
 	INIT_HLIST_HEAD(&isg_net->services);
 	rwlock_init(&isg_net->services_rw_lock);
 
-	isg_net->port_bitmap = vmalloc(BITS_TO_LONGS(PORT_BITMAP_SIZE) * sizeof(unsigned long));
+	isg_net->port_bitmap = bitmap_zalloc(PORT_BITMAP_SIZE, GFP_KERNEL);
 	if (isg_net->port_bitmap == NULL) {
-		return -ENOMEM;
+		goto err;
 	}
-
-	bitmap_zero(isg_net->port_bitmap, PORT_BITMAP_SIZE);
 
 	if (nehash_init(isg_net) < 0) {
 		printk(KERN_ERR "ipt_ISG: Unable to initialize network hash table\n");
-		return -ENOMEM;
+		goto err;
 	}
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3,6,0)
 	isg_net->sknl = netlink_kernel_create(net, ISG_NETLINK_MAIN, &cfg);
@@ -1292,10 +1290,20 @@ static int isg_initialize(struct net *net) {
 
 	if (isg_net->sknl == NULL) {
 		printk(KERN_ERR "ipt_ISG: Can't create ISG_NETLINK_MAIN socket\n");
-		return -1;
+		goto err_sock;
 	}
 
 	return 0;
+
+err_sock:
+	nehash_free_everything(isg_net);
+	ret = -1;
+err:
+	if (isg_net->port_bitmap)
+		bitmap_free(isg_net->port_bitmap);
+	if (isg_net->hash)
+		vfree(isg_net->hash);
+	return ret;
 }
 
 void isg_cleanup(struct isg_net *isg_net) {
@@ -1334,7 +1342,7 @@ void isg_cleanup(struct isg_net *isg_net) {
 	nehash_free_everything(isg_net);
 
 	vfree(isg_net->hash);
-	vfree(isg_net->port_bitmap);
+	bitmap_free(isg_net->port_bitmap);
 	free_percpu(isg_net->cnt);
 }
 
