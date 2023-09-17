@@ -1132,7 +1132,7 @@ isg_tg(struct sk_buff *skb,
 		if (iinfo->flags & INIT_SESSION) {
 			shash = get_isg_hash(laddr);
 			hlist_bl_lock(&isg_net->hash[shash]);
-			
+
 			is = isg_lookup_session_hash(isg_net, laddr, shash);
 			if (!is) {
 				is = __isg_create_session(isg_net, laddr, shash);
@@ -1153,7 +1153,7 @@ isg_tg(struct sk_buff *skb,
 
 			isg_create_session_notify(isg_net, is, src_mac);
 		}
-		if (notify)
+		if (!is || notify)
 			goto out;
 
 	}
