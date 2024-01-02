@@ -690,12 +690,12 @@ static int isg_update_session(struct isg_net *isg_net, struct isg_in_event *ev) 
 	cnt->noaccounting -= noaccounting;
 	spin_unlock_bh(&is->lock);
 
-	if (old_rate)
-		kfree_rcu(old_rate);
 	if (ev->type == EVENT_SESS_APPROVE) {
 		isg_send_event(is->isg_net, EVENT_SESS_START, is, 0, NLMSG_DONE, 0, NULL);
 	}
 
+	if (old_rate)
+		kfree_rcu_mightsleep(old_rate);
 	return 0;
 }
 
@@ -935,7 +935,7 @@ static void isg_session_timeout(struct timer_list *arg) {
 		cnt = this_cpu_ptr(is->isg_net->cnt);
 		cnt->dying--;
 		cnt->noaccounting -= !!IS_SESSION_NOT_ACCOUNTED(is);
-		kfree_rcu(is->rate);
+		kfree_rcu_mightsleep(is->rate);
 		kfree(is);
 		return;
 	}
@@ -1328,7 +1328,7 @@ void isg_cleanup(struct isg_net *isg_net) {
 			rcu_assign_pointer(is->rate, NULL);
 			kfree(is);
 			if (rate)
-				kfree_rcu(rate);
+				kfree_rcu_mightsleep(rate);
 		}
 	}
 
