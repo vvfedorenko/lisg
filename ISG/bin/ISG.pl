@@ -81,6 +81,7 @@ if ((@ARGV == 2 && $ARGV[0] eq "clear") || (@ARGV == 4 && $ARGV[0] eq "change_ra
 	my $dying = $rev{'port_number'};
 	my $noacc = $rev{'alive_interval'};
 	my $all   = $act + $unap + $dying;
+	$act = $act - $noacc
 	print "Approved sessions count:\t" . $act . "\n";
 	print "Unapproved sessions count:\t" . $unap ."\n";
 	print "Dying sessions count:\t" . $dying ."\n";
