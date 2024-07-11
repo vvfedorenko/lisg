@@ -15,9 +15,9 @@ all:
 	printf "/* Compilation date.\n * Written by Makefile (userspace) */\n#define _BUILD_DATE \"%s %s\"\n" `date +'%F %T'` > build.h
 	$(MAKE) -C $(KDIR) M=$(CURDIR) modules
 	gcc -O2 -Wall -Wunused $(IPTABLES_CFLAGS) -fPIC -o libipt_ISG_sh.o -c libipt_isg.c
-	gcc -shared -o libipt_ISG.so libipt_ISG_sh.o
+	gcc -shared -nostdlib -o libipt_ISG.so libipt_ISG_sh.o
 	gcc -O2 -Wall -Wunused $(IPTABLES_CFLAGS) -fPIC -o libipt_isg_mt.o -c libipt_isg_mt.c
-	gcc -shared -o libipt_isg.so libipt_isg_mt.o
+	gcc -shared -nostdlib -o libipt_isg.so libipt_isg_mt.o
 kinstall:
 	$(MAKE) -C $(KDIR) M=$(CURDIR) modules_install
 	/sbin/depmod -a

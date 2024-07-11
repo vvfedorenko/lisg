@@ -19,7 +19,7 @@ get_lib_dir() {
 
 get_lib_from_bin() {
   LIB=`strings $IPTBIN | grep ^/.*lib.*tables`
-  if [ "$LIB" ]; then
+  if [ "$LIB" -a -d "$LIB" ]; then
     IPTLIB=$LIB
     echo "$IPTLIB (from binary)"
     return 0
@@ -31,7 +31,7 @@ get_lib_from_lib() {
   XLIB=`/usr/bin/ldd $IPTBIN | grep libxtables | sed -n 's!.* \(/[^ ]\+\).*!\1!p'`
   test "$XLIB" || return 1
   LIB=`strings $XLIB | grep ^/.*lib.*tables`
-  if [ "$LIB" ]; then
+  if [ "$LIB" -a -d "$LIB" ]; then
     IPTLIB=$LIB
     echo "$IPTLIB (from library)"
     return 0
@@ -99,7 +99,7 @@ iptables_pkg() {
     PKGLIB=`pkg-config --variable=xtlibdir xtables`
     IPTCFLAGS="-DXTABLES"
   else
-    IPTCFLAGS="-I$KDIR/include -DIPTABLES_VERSION=\"$IPTVER\""
+    IPTCFLAGS="-I$IPTSRC/include -DIPTABLES_VERSION=\"$IPTVER\""
   fi
 }
 
