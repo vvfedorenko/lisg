@@ -83,6 +83,7 @@ static inline struct isg_net *isg_pernet(struct net *net) {
 static struct ctl_table_header *isg_sysctl_hdr;
 static struct ctl_table empty_ctl_table[1];
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(3, 4, 0)
 struct ctl_path net_ipt_isg_ctl_path[] = {
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,33)
 	{ .procname = "net", .ctl_name = CTL_NET, },
@@ -92,8 +93,12 @@ struct ctl_path net_ipt_isg_ctl_path[] = {
 	{ .procname = "ipt_ISG", },
 	{ },
 };
+#endif
 
-static struct ctl_table isg_net_table[] = {
+static struct isg_sysctl_table {
+	struct ctl_table vars[4];
+} isg_net_table = {
+	.vars = {
 	{
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,33)
 	.ctl_name	= CTL_UNNUMBERED,
@@ -122,6 +127,7 @@ static struct ctl_table isg_net_table[] = {
 	.proc_handler	= proc_dointvec
 	},
 	{ },
+	},
 };
 
 #ifdef DEBUG
@@ -1306,7 +1312,7 @@ err:
 	return ret;
 }
 
-void isg_cleanup(struct isg_net *isg_net) {
+static void isg_cleanup(struct isg_net *isg_net) {
 	unsigned int i;
 	struct isg_session *is;
 	struct isg_session_rate *rate;
@@ -1348,7 +1354,7 @@ void isg_cleanup(struct isg_net *isg_net) {
 
 static int __net_init isg_net_init(struct net *net) {
 	struct isg_net *isg_net;
-	struct ctl_table *table;
+	struct isg_sysctl_table *table;
 	int err = -ENOMEM, i;
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,33)
 	isg_net = kzalloc(sizeof(struct isg_net), GFP_KERNEL);
@@ -1364,7 +1370,7 @@ static int __net_init isg_net_init(struct net *net) {
 
 	isg_net = isg_pernet(net);
 
-	table = kmemdup(isg_net_table, sizeof(isg_net_table), GFP_KERNEL);
+	table = kmemdup(&isg_net_table, sizeof(*table), GFP_KERNEL);
 	if (table == NULL) {
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,33)
 	goto err_assign;
@@ -1373,9 +1379,9 @@ static int __net_init isg_net_init(struct net *net) {
 #endif
 	}
 
-	table[0].data = &isg_net->tg_permit_action;
-	table[1].data = &isg_net->tg_deny_action;
-	table[2].data = &isg_net->pass_outgoing;
+	table->vars[0].data = &isg_net->tg_permit_action;
+	table->vars[1].data = &isg_net->tg_deny_action;
+	table->vars[2].data = &isg_net->pass_outgoing;
 
 	isg_net->cnt = alloc_percpu_gfp(struct isg_net_stat, GFP_KERNEL);
 	if (!isg_net->cnt)
@@ -1389,9 +1395,9 @@ static int __net_init isg_net_init(struct net *net) {
 	}
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0)
-	isg_net->sysctl_hdr = register_net_sysctl(net, "net/ipt_ISG", table);
+	isg_net->sysctl_hdr = register_net_sysctl(net, "net/ipt_ISG", table->vars);
 #else
-	isg_net->sysctl_hdr = register_net_sysctl_table(net, net_ipt_isg_ctl_path, table);
+	isg_net->sysctl_hdr = register_net_sysctl_table(net, net_ipt_isg_ctl_path, table->vars);
 #endif
 	if (isg_net->sysctl_hdr == NULL) {
 		err = -ENOMEM;
@@ -1466,7 +1472,7 @@ static int __init isg_tg_init(void) {
 
 	get_random_bytes(&jhash_rnd, sizeof(jhash_rnd));
 
-	isg_sysctl_hdr = register_sysctl_paths(net_ipt_isg_ctl_path, empty_ctl_table);
+	isg_sysctl_hdr = register_sysctl("net/ipt_ISG", empty_ctl_table);
 	if (isg_sysctl_hdr == NULL) {
 		return -ENOMEM;
 	}
