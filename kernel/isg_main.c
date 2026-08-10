@@ -28,6 +28,7 @@ static int isg_free_session(struct isg_session *);
 static int isg_clear_session(struct isg_net *, struct isg_in_event *);
 static int isg_update_session(struct isg_net *, struct isg_in_event *);
 static void isg_send_session_count(struct isg_net *, pid_t);
+static void isg_send_session_totals(struct isg_net *, pid_t);
 static struct sk_buff *isg_send_event(struct isg_net *, u_int16_t, struct isg_session *,
 						pid_t, int, int, struct sk_buff *);
 static void isg_send_event_type(struct isg_net *, pid_t, u_int32_t);
@@ -44,6 +45,10 @@ static void isg_send_services_list(struct isg_net *, pid_t, struct isg_in_event 
 static unsigned int nr_buckets = 8192;
 module_param(nr_buckets, uint, 0400);
 MODULE_PARM_DESC(nr_buckets, "Number of buckets to store current sessions list");
+
+static unsigned int max_sessions = 65536;
+module_param(max_sessions, uint, 0400);
+MODULE_PARM_DESC(max_sessions, "Maximum number of concurrent sessions (port bitmap size)");
 
 unsigned int nehash_key_len = 20;
 module_param(nehash_key_len, uint, 0400);
@@ -79,9 +84,6 @@ static int isg_net_id;
 static inline struct isg_net *isg_pernet(struct net *net) {
 	return net_generic(net, isg_net_id);
 }
-
-static struct ctl_table_header *isg_sysctl_hdr;
-static struct ctl_table empty_ctl_table[1];
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(3, 4, 0)
 struct ctl_path net_ipt_isg_ctl_path[] = {
@@ -216,6 +218,10 @@ static void isg_nl_receive_skb(struct sk_buff *skb) {
 
 		case EVENT_SERV_GETLIST:
 			isg_send_services_list(isg_net, from_pid, ev);
+			break;
+
+		case EVENT_SESS_GETTOTALS:
+			isg_send_session_totals(isg_net, from_pid);
 			break;
 
 		default:
@@ -569,9 +575,27 @@ static void isg_create_session_notify(struct isg_net *isg_net, struct isg_sessio
 
 	get_random_bytes(&(is->info.id), sizeof(is->info.id));
 
-	port_number = find_first_zero_bit(isg_net->port_bitmap, PORT_BITMAP_SIZE);
-	while(test_and_set_bit(port_number, isg_net->port_bitmap)) {
-		port_number = find_next_zero_bit(isg_net->port_bitmap, PORT_BITMAP_SIZE, port_number);
+	port_number = find_first_zero_bit(isg_net->port_bitmap, isg_net->max_sessions);
+	while (port_number < isg_net->max_sessions &&
+	       test_and_set_bit(port_number, isg_net->port_bitmap)) {
+		port_number = find_next_zero_bit(isg_net->port_bitmap, isg_net->max_sessions, port_number);
+	}
+	if (unlikely(port_number >= isg_net->max_sessions)) {
+		struct hlist_bl_head *h = &isg_net->hash[is->hash_key];
+		struct isg_net_stat *cnt;
+
+		printk_ratelimited(KERN_ERR "ipt_ISG: port bitmap exhausted, dropping session\n");
+		local_bh_disable();
+		hlist_bl_lock(h);
+		hlist_bl_del_init(&is->list);
+		hlist_bl_unlock(h);
+		local_bh_enable();
+		set_bit(ISG_IS_DYING, &is->info.flags);
+		cnt = this_cpu_ptr(isg_net->cnt);
+		cnt->dying++;
+		timer_setup(&is->timer, isg_session_timeout, 0);
+		mod_timer(&is->timer, jiffies + 2 * HZ);
+		return;
 	}
 	is->info.port_number = port_number;
 
@@ -854,6 +878,79 @@ static void isg_send_sessions_list(struct isg_net *isg_net, pid_t pid, struct is
 	}
 }
 
+#define ISG_TOP_N 10
+
+static void isg_send_session_totals(struct isg_net *isg_net, pid_t pid) {
+	struct isg_session *nis, *is;
+	struct hlist_bl_node *l, *n;
+	struct sk_buff *skb = NULL;
+	unsigned int i, j;
+
+	/* top-N tracking: fixed array, replace the minimum entry */
+	struct {
+		u64 total;
+		struct isg_session *is;
+	} top[ISG_TOP_N];
+	int top_cnt = 0;
+	u64 top_min = 0;
+	int top_min_idx = 0;
+
+	nis = kzalloc(sizeof(struct isg_session), GFP_ATOMIC);
+	if (!nis) {
+		printk(KERN_ERR "ipt_ISG: session allocation failed\n");
+		return;
+	}
+	spin_lock_init(&nis->lock);
+
+	for (i = 0; i < nr_buckets; i++) {
+		hlist_bl_for_each_entry_safe(is, l, n, &isg_net->hash[i], list) {
+			u64 ib, ob, total;
+
+			if (IS_SERVICE(is))
+				continue;
+
+			ib = READ_ONCE(is->stat[ISG_DIR_IN].bytes);
+			ob = READ_ONCE(is->stat[ISG_DIR_OUT].bytes);
+			total = ib + ob;
+
+			nis->stat[ISG_DIR_IN].bytes  += ib;
+			nis->stat[ISG_DIR_OUT].bytes += ob;
+
+			if (top_cnt < ISG_TOP_N) {
+				top[top_cnt].total = total;
+				top[top_cnt].is    = is;
+				top_cnt++;
+				if (total < top_min || top_cnt == 1) {
+					top_min     = total;
+					top_min_idx = top_cnt - 1;
+				}
+			} else if (total > top_min) {
+				top[top_min_idx].total = total;
+				top[top_min_idx].is    = is;
+				top_min     = total;
+				top_min_idx = 0;
+				for (j = 1; j < ISG_TOP_N; j++) {
+					if (top[j].total < top_min) {
+						top_min     = top[j].total;
+						top_min_idx = j;
+					}
+				}
+			}
+		}
+	}
+
+	/* Send aggregate totals first */
+	skb = isg_send_event(isg_net, EVENT_SESS_TOTALS, nis, pid, 0, NLM_F_MULTI, NULL);
+
+	/* Then top-N sessions as SESS_INFO (best-effort: session may be gone) */
+	for (i = 0; i < (unsigned int)top_cnt; i++)
+		skb = isg_send_event(isg_net, EVENT_SESS_INFO, top[i].is, pid,
+				     0, NLM_F_MULTI, skb);
+
+	isg_send_event(isg_net, EVENT_SESS_INFO, NULL, pid, NLMSG_DONE, NLM_F_MULTI, skb);
+	kfree(nis);
+}
+
 static void isg_send_session_count(struct isg_net *isg_net, pid_t pid) {
 	struct isg_session *nis;
 	int i;
@@ -883,7 +980,10 @@ static void isg_send_services_list(struct isg_net *isg_net, pid_t pid, struct is
 	struct isg_session *is, *isrv;
 	struct sk_buff *skb = NULL;
 
-	is = isg_find_session(isg_net, ev);
+	if (ev->si.sinfo.ipaddr)
+		is = isg_lookup_session(isg_net, ev->si.sinfo.ipaddr);
+	else
+		is = isg_find_session(isg_net, ev);
 
 	if (is && !hlist_empty(&is->srv_head)) {
 		hlist_for_each_entry(isrv, &is->srv_head, srv_node) {
@@ -1048,7 +1148,7 @@ isg_mt(const struct sk_buff *skb,
 		struct nehash_entry *ne;
 		struct traffic_class **tc_list;
 
-		read_lock_bh(&is->isg_net->nehash_rw_lock);
+		rcu_read_lock();
 		ne = nehash_lookup(is->isg_net, iph->daddr);
 		if (ne == NULL)
 			goto out;
@@ -1075,7 +1175,7 @@ isg_mt(const struct sk_buff *skb,
 			break;
 		}
 out:
-		read_unlock_bh(&is->isg_net->nehash_rw_lock);
+		rcu_read_unlock();
 	}
 
 	return err;
@@ -1173,10 +1273,10 @@ isg_tg(struct sk_buff *skb,
 	if (unlikely(!hlist_empty(&is->srv_head))) {
 		/* This session is having sub-sessions, try to classify */
 		iisg_net = is->isg_net;
-		read_lock_bh(&iisg_net->nehash_rw_lock);
+		rcu_read_lock();
 		ne = nehash_lookup(iisg_net, raddr);
 		if (ne == NULL) {
-			read_unlock_bh(&iisg_net->nehash_rw_lock);
+			rcu_read_unlock();
 			/* assume action = action_drop; */
 			goto out;
 		}
@@ -1204,7 +1304,7 @@ isg_tg(struct sk_buff *skb,
 			}
 		}
 
-		read_unlock_bh(&iisg_net->nehash_rw_lock);
+		rcu_read_unlock();
 		if (!parent_is) {
 			/* This packet doesn't belongs to session's services (or appropriate service's status is not on) */
 			/* assume action = action_drop; */
@@ -1279,7 +1379,8 @@ static int isg_initialize(struct net *net) {
 	INIT_HLIST_HEAD(&isg_net->services);
 	rwlock_init(&isg_net->services_rw_lock);
 
-	isg_net->port_bitmap = bitmap_zalloc(PORT_BITMAP_SIZE, GFP_KERNEL);
+	isg_net->max_sessions = max_sessions;
+	isg_net->port_bitmap  = bitmap_zalloc(isg_net->max_sessions, GFP_KERNEL);
 	if (isg_net->port_bitmap == NULL) {
 		goto err;
 	}
@@ -1394,10 +1495,12 @@ static int __net_init isg_net_init(struct net *net) {
 		cnt->noaccounting = 0;
 	}
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0)
-	isg_net->sysctl_hdr = register_net_sysctl(net, "net/ipt_ISG", table->vars);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,11,0)
+        isg_net->sysctl_hdr = register_net_sysctl_sz(net, "net/ipt_ISG", table->vars, 3);
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(3,5,0)
+        isg_net->sysctl_hdr = register_net_sysctl(net, "net/ipt_ISG", table->vars);
 #else
-	isg_net->sysctl_hdr = register_net_sysctl_table(net, net_ipt_isg_ctl_path, table->vars);
+        isg_net->sysctl_hdr = register_net_sysctl_table(net, net_ipt_isg_ctl_path, table->vars);
 #endif
 	if (isg_net->sysctl_hdr == NULL) {
 		err = -ENOMEM;
@@ -1472,11 +1575,6 @@ static int __init isg_tg_init(void) {
 
 	get_random_bytes(&jhash_rnd, sizeof(jhash_rnd));
 
-	isg_sysctl_hdr = register_sysctl("net/ipt_ISG", empty_ctl_table);
-	if (isg_sysctl_hdr == NULL) {
-		return -ENOMEM;
-	}
-
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,33)
 	err = register_pernet_gen_subsys(&isg_net_id, &isg_net_ops);
 #else /* < 2.6.33 */
@@ -1514,7 +1612,6 @@ static void __exit isg_tg_exit(void) {
 #else /* < 2.6.33 */
 	unregister_pernet_subsys(&isg_net_ops);
 #endif
-	unregister_sysctl_table(isg_sysctl_hdr);
 
 	printk(KERN_INFO "ipt_ISG: Unloaded\n");
 }

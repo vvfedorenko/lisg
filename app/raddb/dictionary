@@ -51,8 +51,8 @@ ATTRIBUTE	Framed-AppleTalk-Zone	39	string
 
 ATTRIBUTE	Acct-Status-Type	40	integer
 ATTRIBUTE	Acct-Delay-Time		41	integer
-ATTRIBUTE	Acct-Input-String	42	integer
-ATTRIBUTE	Acct-Output-String	43	integer
+ATTRIBUTE	Acct-Input-Octets	42	integer
+ATTRIBUTE	Acct-Output-Octets	43	integer
 ATTRIBUTE	Acct-Session-Id		44	string
 ATTRIBUTE	Acct-Authentic		45	integer
 ATTRIBUTE	Acct-Session-Time	46	integer

@@ -12,6 +12,7 @@
 #include <net/net_namespace.h>
 #include <net/netns/generic.h>
 #include <linux/list_bl.h>
+#include <linux/rculist.h>
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 4, 0)
 #include <linux/bitmap.h>
 #endif
@@ -20,8 +21,7 @@
 #include "kcompat.h"
 
 #define ISG_NETLINK_MAIN     MAX_LINKS - 1
-#define PORT_BITMAP_SIZE     65536
-#define INITIAL_MAX_DURATION 60
+#define INITIAL_MAX_DURATION (60ULL * NSEC_PER_SEC)
 #define MAX_SD_CLASSES       16
 
 #define ISG_DIR_IN    0x00
@@ -43,6 +43,7 @@
 #define	EVENT_SDESC_ADD       0x18
 #define	EVENT_SDESC_SWEEP_TC  0x19
 #define	EVENT_SERV_GETLIST    0x20
+#define	EVENT_SESS_GETTOTALS  0x21
 
 /* From Kernel to Userspace */
 #define	EVENT_SESS_CREATE  0x03
@@ -51,6 +52,7 @@
 #define	EVENT_SESS_STOP    0x08
 #define	EVENT_SESS_INFO    0x11
 #define	EVENT_SESS_COUNT   0x13
+#define	EVENT_SESS_TOTALS  0x22
 
 #define	EVENT_KERNEL_ACK  0x98
 #define	EVENT_KERNEL_NACK 0x99
@@ -268,6 +270,7 @@ struct nehash_entry {
 	u32 pfx;
 	u32 mask;
 	struct traffic_class *tc;
+	struct rcu_head rcu;
 };
 
 struct isg_service_desc {
@@ -300,6 +303,7 @@ struct isg_net {
 	u8 listener_ver;
 
 	unsigned long *port_bitmap;
+	unsigned int   max_sessions;
 
 	struct ctl_table_header *sysctl_hdr;
 

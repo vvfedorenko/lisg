@@ -1,0 +1,12 @@
+[Unit]
+Description=Linux ISG daemon
+After=iptables.target
+
+[Service]
+Type=simple
+ExecStartPre=-/usr/sbin/modprobe ipt_ISG
+ExecStart=/opt/ISGpy/venv/bin/python /opt/ISGpy/ISGd.py
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

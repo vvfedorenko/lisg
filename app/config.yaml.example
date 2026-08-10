@@ -1,0 +1,211 @@
+# ISGd configuration
+# Paths are relative to this file's directory.
+
+daemonize: false
+debug: true
+pid_file: /var/run/ISGd.pid
+log_facility: local7
+
+radius_dictionary: raddb/dictionary   # .cisco extension loaded automatically
+
+tc_file: tc.conf
+
+# ── Auth and accounting pools ──────────────────────────────────────────────
+# Each entry requires a `type` field: 'radius' (default) or 'mysql'.
+#
+# Auth:       entries are tried in ascending priority order; the first that
+#             returns a result (accept OR reject) wins.  BackendUnavailable
+#             (timeout, network error, DB down) moves to the next entry.
+#
+# Accounting: ALL entries receive every record simultaneously.
+#             Useful for logging to both RADIUS and MySQL at once.
+
+auth:
+  0: {type: radius, server: "127.0.0.1:1812", timeout: 5, secret: "apple"}
+  # 1: {type: mysql, host: 127.0.0.1, port: 3306, user: isg, password: secret, database: billing}
+
+accounting:
+  0: {type: radius, server: "127.0.0.1:1813", timeout: 5, secret: "apple"}
+  # 1: {type: mysql, host: 127.0.0.1, port: 3306, user: isg, password: secret, database: billing}
+
+# Optional: override NAS-IP-Address sent in RADIUS (default: auto-detected).
+# Useful when gethostbyname() returns a loopback or wrong address.
+# nas_ip: 192.168.1.1
+
+# Optional: override the NAS-Identifier sent in RADIUS (default: NAS IP).
+# nas_identifier: lISG
+
+# ── CoA / Disconnect ───────────────────────────────────────────────────────
+# coa_server: "127.0.0.1"    # restrict to one IP; comment out = accept any
+coa_secret: "apple"
+coa_port: 3799
+
+# ── REST API ───────────────────────────────────────────────────────────────
+# Optional HTTP API for status/session management (requires fastapi + uvicorn).
+# api:
+#   enabled: true
+#   host: 0.0.0.0
+#   port: 8080
+#   token: "change-me"        # Bearer token; empty = no token check
+#   access_list:              # optional CIDR allow-list; empty = accept any IP
+#     - 127.0.0.1
+#     - 192.168.0.0/16
+#
+# Endpoints:
+#   GET  /status                  session counts, uptime, backend list
+#   GET  /sessions?limit=&offset= paginated session list
+#   GET  /sessions/{id}           id = ip | mac | session_id
+#   PUT  /sessions/{id}           body: {in_kbps, out_kbps, approve, block}
+#                                 (approve on a non-existent IP pre-approves it)
+
+# ── Session defaults ───────────────────────────────────────────────────────
+session_alive_interval: 60        # Interim-Update interval (seconds; 0 = off)
+session_idle_timeout: 1800        # Inactivity disconnect (seconds)
+session_max_duration: 86400       # Hard session limit (seconds)
+unauth_session_max_duration: 60   # Lifetime of an unauthenticated session
+
+# ── Behaviour for UNAUTHORISED sessions (rejected / not found in DB) ────────
+# A subscriber whose IP is not found by the auth backend gets a "reject".
+# What happens then depends on unauth_service_name_list below.
+#
+# Variant A — NO internet at all (default):
+#   Leave unauth_service_name_list empty/commented out. The session is left
+#   UNAPPROVED (flags == 0) and the kernel drops all of its traffic. The
+#   subscriber gets nothing until added to the DB.
+#   unauth_session_max_duration (above) = how often a rejected session is
+#   reaped and re-checked against the DB, so a freshly-added client gets
+#   online within that many seconds.
+#
+# Variant B — microscopic speed / walled garden:
+#   Apply a tiny-rate service covering ALL traffic, so unauthorised users have
+#   a barely-usable link (e.g. just enough to load a "please pay" page).
+#     1. Define a low-rate service on the ALL_OTHER catch-all class
+#        (rate_info numbers are in bits/s):
+#
+#          services:
+#            UNAUTH_SLOW:
+#              rate_info: "QD;8000;2000;U;8000;2000"   # ~8 kbit/s down & up
+#              traffic_classes: [ALL_OTHER]            # must exist in tc.conf
+#
+#     2. Activate it for rejected sessions ("A" = activate, "N" = deactivate):
+#
+#          unauth_service_name_list:
+#            - AUNAUTH_SLOW
+#
+#   Lower the rate_info numbers for an even slower link (1000 = 1 kbit/s).
+#
+# Services applied when the auth backend rejects ("A<name>" / "N<name>"):
+# unauth_service_name_list:
+#   - AUNAUTH_SLOW       # Variant B  (or e.g. AREDIRECT for an L4-redirect service)
+
+# Suppress all RADIUS accounting (even Start/Stop)
+# no_accounting: true
+
+# ── Thread pool sizes ──────────────────────────────────────────────────────
+# auth_workers:  max concurrent auth threads (one per new session).
+#                0 = disable authentication entirely (all sessions left unapproved).
+# acct_workers:  max concurrent accounting threads (Start/Update/Stop).
+#                0 = disable accounting entirely (no RADIUS/MySQL acct calls).
+#
+# Rule of thumb: auth_workers ≥ expected peak new-sessions/s × auth_timeout_s.
+# For MySQL accounting at high session counts (>500), a smaller pool prevents
+# thread-stack virtual-memory bloat (each OS thread reserves ~8 MB VSZ).
+#
+# auth_workers: 16
+# acct_workers: 32
+
+# Disable ANSI color codes in ISG.py output
+# no_color_output: true
+
+# Columns shown by ISG.py (default: all, in this order)
+# Remove or comment out any entry to hide that column.
+# columns:
+#   - user_ip
+#   - mac
+#   - nat_ip
+#   - port
+#   - session_id
+#   - duration
+#   - octets_in
+#   - octets_out
+#   - rate_in
+#   - rate_out
+#   - service
+#   - flags
+
+# ── MySQL query overrides ──────────────────────────────────────────────────
+# Connection params (host, port, user, password, database) are set per-entry
+# in the auth/accounting pools above.
+# This section overrides the default SQL queries and connection settings for
+# ALL mysql-type entries.
+#
+# conn_max_age: 3600   # Max per-thread connection lifetime (seconds). Default: 3600.
+#                      # Each worker thread holds its own MySQL connection;
+#                      # when the connection reaches this age it is closed and
+#                      # a fresh one is opened on the next request.
+#                      # Must be less than MySQL's wait_timeout (SHOW VARIABLES
+#                      # LIKE 'wait_timeout') to avoid "Lost connection" errors.
+#                      # A value of ~80% of wait_timeout is a safe margin.
+#
+# Available %(name)s params for auth_query:
+#   %(ip)s, %(nas_ip)s
+# Available params for acct_*_query:
+#   %(session_id)s, %(ip)s, %(nat_ip)s, %(port_number)s,
+#   %(duration)s, %(in_bytes)s, %(out_bytes)s,
+#   %(in_packets)s, %(out_packets)s, %(nas_ip)s, %(nas_id)s, %(acct_type)s
+#
+# Auth query result columns (all optional; non-empty row = accepted):
+#   accepted (0/1)
+#   cisco-avpair / cisco_avpair / cisco_account_info
+#                    — Cisco-Account-Info string, comma-separated for multiple.
+#                      Parsed identically to RADIUS:
+#                        A<name> / N<name>  activate/deactivate service
+#                        QD;<dl>;…;U;<ul>;… session rate override
+#                        QC;<class>;…       dynamic per-class service
+#   nat_ip           — Framed-IP-Address
+#   alive_interval, max_duration, idle_timeout  — session timer overrides
+#   class / cookie   — Class attribute (≤32 chars)
+#   no_accounting    — 0/1
+#
+# mysql:
+#   auth_query: >
+#     SELECT 1 AS accepted, `cisco-avpair`
+#     FROM billing_clients WHERE ip = %(ip)s LIMIT 1
+#   acct_start_query: >
+#     INSERT INTO radacct
+#       (acctsessionid, username, nasipaddress, nasportid, acctstarttime, framedipaddress)
+#     VALUES (%(session_id)s, %(ip)s, %(nas_ip)s, %(port_number)s, NOW(), %(nat_ip)s)
+#     ON DUPLICATE KEY UPDATE acctstarttime = NOW()
+#   acct_update_query: >
+#     UPDATE radacct SET acctsessiontime = %(duration)s,
+#       acctinputoctets = %(in_bytes)s, acctoutputoctets = %(out_bytes)s
+#     WHERE acctsessionid = %(session_id)s
+#   acct_stop_query: >
+#     UPDATE radacct SET acctstoptime = NOW(), acctsessiontime = %(duration)s,
+#       acctinputoctets = %(in_bytes)s, acctoutputoctets = %(out_bytes)s
+#     WHERE acctsessionid = %(session_id)s
+
+# Reload tc.conf when its checksum changes, checked every N seconds
+tc_check_interval: 300
+
+# ── Service definitions ────────────────────────────────────────────────────
+# rate_info: Cisco-Account-Info string
+#   QD;<dl_kbps>;<dl_burst>;U;<ul_kbps>;<ul_burst>
+# type: policer (default) | tagger
+#   tagger services match the 'isg' iptables match but do not police traffic.
+services:
+  TESTSERV:
+    rate_info: "QD;512000;96000;U;512000;96000"
+    traffic_classes: [OUR_LOCAL, PEERING]
+    # no_accounting: true
+    alive_interval: 120
+    idle_timeout: 600
+    max_duration: 10000
+
+  # Walled-garden service for unauthorised users (Variant B above).
+  # Tiny rate on the ALL_OTHER catch-all class → ~8 kbit/s on all traffic.
+  # Enable by adding "AUNAUTH_SLOW" to unauth_service_name_list.
+  # UNAUTH_SLOW:
+  #   rate_info: "QD;8000;2000;U;8000;2000"
+  #   traffic_classes: [ALL_OTHER]
+  #   no_accounting: true

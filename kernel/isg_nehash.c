@@ -87,7 +87,7 @@ static int nehash_insert(struct isg_net *isg_net, u_int32_t pfx, u_int32_t mask,
 		ne->tc   = tc;
 
 		if (hlist_empty(&isg_net->nehash[idx])) {
-			hlist_add_head(&ne->list, &isg_net->nehash[idx]);
+			hlist_add_head_rcu(&ne->list, &isg_net->nehash[idx]);
 		} else {
 			hlist_for_each_entry(cne, &isg_net->nehash[idx], list) {
 				if (ne->mask > cne->mask) {
@@ -98,18 +98,21 @@ static int nehash_insert(struct isg_net *isg_net, u_int32_t pfx, u_int32_t mask,
 
 			if (last_ne) {
 				#if LINUX_VERSION_CODE < KERNEL_VERSION(3,17,0)
-					hlist_add_after(&last_ne->list, &ne->list);
+					hlist_add_after_rcu(&last_ne->list, &ne->list);
 				#else
-					hlist_add_behind(&ne->list, &last_ne->list);
+					hlist_add_behind_rcu(&ne->list, &last_ne->list);
 				#endif
 			} else {
-				hlist_add_before(&ne->list, &cne->list);
+				hlist_add_before_rcu(&ne->list, &cne->list);
 			}
 		}
 	}
 	return 0;
 }
 
+/* Hot path: MUST be called under rcu_read_lock(). The returned entry is
+ * only guaranteed to stay valid while the caller holds the RCU read-side
+ * critical section. */
 inline struct nehash_entry *nehash_lookup(struct isg_net *isg_net, u_int32_t ipaddr) {
 	struct nehash_entry *ne, *rne = NULL;
 
@@ -118,9 +121,7 @@ inline struct nehash_entry *nehash_lookup(struct isg_net *isg_net, u_int32_t ipa
 	key = ntohl(ipaddr);
 	idx = key >> (32 - nehash_key_len);
 
-	read_lock_bh(&isg_net->nehash_rw_lock);
-
-	hlist_for_each_entry(ne, &isg_net->nehash[idx], list) {
+	hlist_for_each_entry_rcu(ne, &isg_net->nehash[idx], list) {
 		if ((key & ne->mask) == ne->pfx) {
 			rne = ne;
 			break;
@@ -129,14 +130,13 @@ inline struct nehash_entry *nehash_lookup(struct isg_net *isg_net, u_int32_t ipa
 
 	/* Trying to use "default" */
 	if (!rne) {
-		hlist_for_each_entry(ne, &isg_net->nehash[0], list) {
+		hlist_for_each_entry_rcu(ne, &isg_net->nehash[0], list) {
 			if (ne->pfx == 0 && ne->mask == 0) {
 				rne = ne;
 				break;
 			}
 		}
 	}
-	read_unlock_bh(&isg_net->nehash_rw_lock);
 	return rne;
 }
 
@@ -197,8 +197,8 @@ void nehash_sweep_entries(struct isg_net *isg_net) {
 
 	for (i = 0; i < (1 << nehash_key_len); i++) {
 		hlist_for_each_entry_safe(ne, n, &isg_net->nehash[i], list) {
-			hlist_del(&ne->list);
-			kfree(ne);
+			hlist_del_rcu(&ne->list);
+			kfree_rcu(ne, rcu);
 		}
 	}
 }
@@ -207,6 +207,12 @@ void nehash_free_everything(struct isg_net *isg_net) {
 	nehash_sweep_queue(isg_net);
 
 	nehash_sweep_entries(isg_net);
+
+	/* Wait for any in-flight hot-path readers (nehash_lookup) to drop
+	 * their references before freeing the traffic classes they may point
+	 * at and the bucket array itself. */
+	synchronize_rcu();
+
 	nehash_sweep_tc(isg_net);
 
 	if (isg_net->nehash) {
